@@ -1,0 +1,26 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# macOS
+.DS_Store
+
+# Build outputs
+dist
+build
+out
+.turbo
+*.log
+
+# Tauri / Rust
+src-tauri/target
+
+# Expo / React Native
+.expo/
+*.orig.*
+
+# Environment / Local Secrets
+.env
+.env.local
+.env.development.local
+.env.production.local

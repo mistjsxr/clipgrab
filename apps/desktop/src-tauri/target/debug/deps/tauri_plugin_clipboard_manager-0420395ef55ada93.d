@@ -1,0 +1,8 @@
+/Users/mistjs/Documents/GitHub/clipgrab/apps/desktop/src-tauri/target/debug/deps/tauri_plugin_clipboard_manager-0420395ef55ada93.d: /Users/mistjs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-clipboard-manager-2.3.2/src/lib.rs /Users/mistjs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-clipboard-manager-2.3.2/src/desktop.rs /Users/mistjs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-clipboard-manager-2.3.2/src/commands.rs /Users/mistjs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-clipboard-manager-2.3.2/src/error.rs
+
+/Users/mistjs/Documents/GitHub/clipgrab/apps/desktop/src-tauri/target/debug/deps/libtauri_plugin_clipboard_manager-0420395ef55ada93.rmeta: /Users/mistjs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-clipboard-manager-2.3.2/src/lib.rs /Users/mistjs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-clipboard-manager-2.3.2/src/desktop.rs /Users/mistjs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-clipboard-manager-2.3.2/src/commands.rs /Users/mistjs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-clipboard-manager-2.3.2/src/error.rs
+
+/Users/mistjs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-clipboard-manager-2.3.2/src/lib.rs:
+/Users/mistjs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-clipboard-manager-2.3.2/src/desktop.rs:
+/Users/mistjs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-clipboard-manager-2.3.2/src/commands.rs:
+/Users/mistjs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-clipboard-manager-2.3.2/src/error.rs:

@@ -1,0 +1,29 @@
+{
+  "name": "@clipgrab/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch --mode development",
+    "build": "tsc && vite build",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@clipgrab/core-downloader": "workspace:*",
+    "@clipgrab/db": "workspace:*",
+    "@clipgrab/types": "workspace:*",
+    "@clipgrab/ui": "workspace:*",
+    "lucide-react": "^0.359.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@clipgrab/config": "workspace:*",
+    "@types/chrome": "^0.0.260",
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "@vitejs/plugin-react": "^4.2.1",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.0"
+  }
+}

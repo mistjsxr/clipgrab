@@ -1,0 +1,22 @@
+{
+  "name": "@clipgrab/db",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.9.0",
+    "drizzle-orm": "^0.30.0"
+  },
+  "devDependencies": {
+    "@clipgrab/config": "workspace:*",
+    "@clipgrab/types": "workspace:*",
+    "drizzle-kit": "^0.20.0",
+    "typescript": "^5.4.5"
+  }
+}
