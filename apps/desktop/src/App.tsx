@@ -29,6 +29,7 @@ export default function App() {
 
   // Download Engine & Terminal Console state
   const [downloadConfig, setDownloadConfig] = useState<DownloadConfig>(DEFAULT_DOWNLOAD_CONFIG);
+  const [targetDownloadJobs, setTargetDownloadJobs] = useState<MediaJob[]>([]);
   const [isDownloadingBatch, setIsDownloadingBatch] = useState(false);
   const [jobLogs, setJobLogs] = useState<Record<string, string[]>>({});
   const [activeConsoleJob, setActiveConsoleJob] = useState<MediaJob | null>(null);
@@ -174,16 +175,35 @@ export default function App() {
     }));
   };
 
-  const handleDownloadSingleJob = async (job: MediaJob, openConsole = true) => {
-    if (openConsole) {
-      setActiveConsoleJob(job);
+  // Trigger download options popup for a single job (Start / Retry)
+  const triggerSingleJobOptions = (job: MediaJob) => {
+    setTargetDownloadJobs([job]);
+    setShowSettingsModal(true);
+  };
+
+  // Trigger download options popup for all pending jobs
+  const triggerBatchJobOptions = () => {
+    const pendingJobs = jobs.filter((j) => j.status === 'pending');
+    if (pendingJobs.length === 0) {
+      alert('No pending media jobs in queue to download.');
+      return;
     }
-    try {
-      setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: 'downloading', progress: 5 } : j)));
-      
+    setTargetDownloadJobs(pendingJobs);
+    setShowSettingsModal(true);
+  };
+
+  // Confirmed execution from DownloadSettingsModal
+  const handleConfirmedDownload = async (confirmedConfig: DownloadConfig) => {
+    if (targetDownloadJobs.length === 0) return;
+
+    // Open terminal console for the first target job
+    setActiveConsoleJob(targetDownloadJobs[0]);
+    setIsDownloadingBatch(true);
+
+    for (const job of targetDownloadJobs) {
       await executeJobDownload(
         job,
-        downloadConfig,
+        confirmedConfig,
         dbUrl,
         (jobId, progress, status) => {
           setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, progress, status } : j)));
@@ -192,9 +212,10 @@ export default function App() {
           appendJobLog(jobId, text);
         }
       );
-    } catch (err) {
-      console.error('Failed to download single job:', err);
     }
+
+    setIsDownloadingBatch(false);
+    setTargetDownloadJobs([]);
   };
 
   const handleCancelJob = async (jobId: string) => {
@@ -206,33 +227,6 @@ export default function App() {
   const handleDeleteJob = async (jobId: string) => {
     setJobs((prev) => prev.filter((j) => j.id !== jobId));
     await deleteJobFromQueue(jobId, dbUrl);
-  };
-
-  const handleStartBatchDownload = async () => {
-    const pendingJobs = jobs.filter((j) => j.status === 'pending');
-    if (pendingJobs.length === 0) {
-      alert('No pending media jobs in queue to download.');
-      return;
-    }
-
-    // Open terminal console for the first pending job
-    setActiveConsoleJob(pendingJobs[0]);
-    setIsDownloadingBatch(true);
-
-    for (const job of pendingJobs) {
-      await executeJobDownload(
-        job,
-        downloadConfig,
-        dbUrl,
-        (jobId, progress, status) => {
-          setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, progress, status } : j)));
-        },
-        (jobId, _type, text) => {
-          appendJobLog(jobId, text);
-        }
-      );
-    }
-    setIsDownloadingBatch(false);
   };
 
   const handleDisconnect = () => {
@@ -359,7 +353,10 @@ export default function App() {
             <div className="flex items-center justify-between">
               <label className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Engine Defaults</label>
               <button
-                onClick={() => setShowSettingsModal(true)}
+                onClick={() => {
+                  setTargetDownloadJobs([]);
+                  setShowSettingsModal(true);
+                }}
                 className="text-[10px] text-violet-400 hover:text-pink-500 font-bold uppercase flex items-center"
               >
                 <Settings2 className="w-3 h-3 mr-1" /> Config
@@ -373,6 +370,10 @@ export default function App() {
               <div className="flex justify-between">
                 <span>Quality:</span>
                 <span className="text-slate-200 uppercase font-bold">{downloadConfig.quality}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Engine:</span>
+                <span className="text-slate-200 uppercase font-bold">{downloadConfig.toolPreference || 'auto'}</span>
               </div>
               <div className="flex items-center space-x-1 text-[10px] text-slate-500 pt-1 border-t border-slate-900 truncate">
                 <FolderOpen className="w-3 h-3 text-cyan-400 flex-shrink-0" />
@@ -427,7 +428,10 @@ export default function App() {
                 variant="outline"
                 size="sm"
                 className="h-9 px-3 text-xs border-slate-800 text-slate-400 hover:text-slate-200"
-                onClick={() => setShowSettingsModal(true)}
+                onClick={() => {
+                  setTargetDownloadJobs([]);
+                  setShowSettingsModal(true);
+                }}
               >
                 <Settings2 className="w-4 h-4 mr-1.5" /> Engine Options
               </Button>
@@ -436,7 +440,7 @@ export default function App() {
                 variant="primary"
                 size="sm"
                 className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-violet-600 to-pink-500 hover:from-pink-500 hover:to-violet-600 disabled:opacity-50"
-                onClick={handleStartBatchDownload}
+                onClick={triggerBatchJobOptions}
                 disabled={isDownloadingBatch || (pendingJobsCount === 0 && downloadingJobsCount === 0)}
               >
                 {isDownloadingBatch ? (
@@ -566,7 +570,7 @@ export default function App() {
                                     variant="outline"
                                     size="sm"
                                     className="px-2.5 py-1 text-[10px] border-slate-800 hover:border-pink-500 hover:text-pink-400"
-                                    onClick={() => handleDownloadSingleJob(job)}
+                                    onClick={() => triggerSingleJobOptions(job)}
                                   >
                                     <Play className="w-3 h-3 mr-1 fill-current" /> Start
                                   </Button>
@@ -618,7 +622,7 @@ export default function App() {
                                     variant="outline"
                                     size="sm"
                                     className="px-2 py-1 text-[10px] border-amber-900/60 text-amber-400 hover:bg-amber-950/40"
-                                    onClick={() => handleDownloadSingleJob(job)}
+                                    onClick={() => triggerSingleJobOptions(job)}
                                   >
                                     <RotateCcw className="w-3 h-3 mr-1" /> Retry
                                   </Button>
@@ -660,11 +664,15 @@ export default function App() {
       {/* Download Settings Modal */}
       <DownloadSettingsModal
         isOpen={showSettingsModal}
-        onClose={() => setShowSettingsModal(false)}
+        onClose={() => {
+          setShowSettingsModal(false);
+          setTargetDownloadJobs([]);
+        }}
         config={downloadConfig}
         onSaveConfig={handleSaveConfig}
-        onStartBatchDownload={handleStartBatchDownload}
-        pendingCount={pendingJobsCount}
+        onStartDownload={handleConfirmedDownload}
+        targetCount={targetDownloadJobs.length > 0 ? targetDownloadJobs.length : pendingJobsCount}
+        title={targetDownloadJobs.length === 1 ? 'Configure Single Download' : 'Configure Batch Download'}
       />
 
       {/* QR Code & Pairing Modal */}

@@ -2,15 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { Button, Card } from '@clipgrab/ui';
 import { open } from '@tauri-apps/plugin-dialog';
 import { DownloadConfig, checkToolAvailability } from '../downloaderEngine';
-import { Folder, Settings2, CheckCircle2, XCircle, Sliders, Film, Music, Image as ImageIcon, Play } from 'lucide-react';
+import { Folder, Settings2, CheckCircle2, XCircle, Sliders, Film, Music, Image as ImageIcon, Play, Wrench } from 'lucide-react';
 
 export interface DownloadSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   config: DownloadConfig;
   onSaveConfig: (newConfig: DownloadConfig) => void;
-  onStartBatchDownload?: () => void;
-  pendingCount: number;
+  onStartDownload?: (newConfig: DownloadConfig) => void;
+  targetCount: number;
+  title?: string;
 }
 
 export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
@@ -18,8 +19,9 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
   onClose,
   config,
   onSaveConfig,
-  onStartBatchDownload,
-  pendingCount,
+  onStartDownload,
+  targetCount,
+  title,
 }) => {
   const [localConfig, setLocalConfig] = useState<DownloadConfig>(config);
   const [toolsStatus, setToolsStatus] = useState<{ ytdlp: boolean; ffmpeg: boolean; gallerydl: boolean }>({
@@ -57,10 +59,10 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
     }
   };
 
-  const handleSaveAndStart = () => {
+  const handleConfirmAndStart = () => {
     onSaveConfig(localConfig);
-    if (onStartBatchDownload) {
-      onStartBatchDownload();
+    if (onStartDownload) {
+      onStartDownload(localConfig);
     }
     onClose();
   };
@@ -75,8 +77,10 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
               <Sliders className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-sm font-black uppercase tracking-wider text-slate-100">Download Engine & Options</h2>
-              <p className="text-[10px] text-slate-500">Configure file formats, codecs, and destination paths.</p>
+              <h2 className="text-sm font-black uppercase tracking-wider text-slate-100">
+                {title || 'Media Download Options'}
+              </h2>
+              <p className="text-[10px] text-slate-500">Configure save destination, format, codecs, and engine tools.</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-500 hover:text-cyber-pink text-xs font-bold transition-colors">
@@ -123,6 +127,22 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
 
           {/* Grid Options */}
           <div className="grid grid-cols-2 gap-4">
+            {/* Download Engine Preference */}
+            <div className="space-y-1.5 col-span-2">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
+                <Wrench className="w-3 h-3 mr-1 text-cyber-cyan" /> CLI Execution Tool
+              </label>
+              <select
+                value={localConfig.toolPreference || 'auto'}
+                onChange={(e) => setLocalConfig({ ...localConfig, toolPreference: e.target.value as any })}
+                className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
+              >
+                <option value="auto">Auto-Detect (yt-dlp for video, gallery-dl for photos)</option>
+                <option value="ytdlp">Force yt-dlp Engine</option>
+                <option value="gallerydl">Force gallery-dl Engine</option>
+              </select>
+            </div>
+
             {/* Resolution */}
             <div className="space-y-1.5">
               <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
@@ -198,9 +218,9 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
           <Button variant="secondary" size="sm" onClick={onClose} className="px-4">
             Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={handleSaveAndStart} className="font-bold text-xs uppercase tracking-wider">
+          <Button variant="primary" size="md" onClick={handleConfirmAndStart} className="font-bold text-xs uppercase tracking-wider">
             <Play className="w-4 h-4 mr-1.5 fill-current" />
-            {pendingCount > 0 ? `Download All (${pendingCount} Tasks)` : 'Save Settings'}
+            {targetCount > 1 ? `Start Download (${targetCount} Tasks)` : `Start Download`}
           </Button>
         </div>
       </Card>

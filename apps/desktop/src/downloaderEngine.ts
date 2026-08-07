@@ -8,6 +8,7 @@ export interface DownloadConfig {
   format: 'mp4' | 'mkv' | 'webm' | 'mp3';
   audioQuality: 'best' | '320k' | '256k' | '128k';
   useGalleryDlForPhotos: boolean;
+  toolPreference: 'auto' | 'ytdlp' | 'gallerydl';
 }
 
 export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
@@ -16,14 +17,18 @@ export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
   format: 'mp4',
   audioQuality: 'best',
   useGalleryDlForPhotos: true,
+  toolPreference: 'auto',
 };
 
 // Map of active child processes running by jobId
 const activeChildProcesses = new Map<string, any>();
 
+// Standard macOS Homebrew PATH exported for GUI Tauri apps
+const MACOS_PATH_ENV = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH";';
+
 export async function checkToolAvailability(toolName: string): Promise<boolean> {
   try {
-    const cmd = Command.create('sh', ['-c', `which ${toolName}`]);
+    const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} which ${toolName}`]);
     const output = await cmd.execute();
     return output.code === 0 && output.stdout.trim().length > 0;
   } catch (err) {
@@ -100,8 +105,16 @@ export async function executeJobDownload(
     console.error('Failed to set downloading status in DB:', err);
   }
 
-  // Smart Tool Check & Fallback
-  let useGalleryDl = config.useGalleryDlForPhotos && isPhotoUrl(job.url, job.platform);
+  // Tool Selection & Fallback Logic
+  let useGalleryDl = false;
+  if (config.toolPreference === 'gallerydl') {
+    useGalleryDl = true;
+  } else if (config.toolPreference === 'ytdlp') {
+    useGalleryDl = false;
+  } else {
+    useGalleryDl = config.useGalleryDlForPhotos && isPhotoUrl(job.url, job.platform);
+  }
+
   if (useGalleryDl) {
     const galleryDlAvailable = await checkToolAvailability('gallery-dl');
     if (!galleryDlAvailable) {
@@ -165,13 +178,13 @@ export async function executeJobDownload(
       args.push(job.url);
     }
 
-    const fullCommandStr = `${toolBinary} ${args.map((a) => `"${a}"`).join(' ')}`;
+    const commandToExec = `${MACOS_PATH_ENV} ${toolBinary} ${args.map((a) => `"${a}"`).join(' ')}`;
     if (onLogOutput) {
-      onLogOutput(job.id, 'info', `$ ${fullCommandStr}`);
+      onLogOutput(job.id, 'info', `$ ${toolBinary} ${args.map((a) => `"${a}"`).join(' ')}`);
     }
 
     try {
-      const cmd = Command.create('sh', ['-c', fullCommandStr]);
+      const cmd = Command.create('sh', ['-c', commandToExec]);
       let lastProgress = 5;
 
       cmd.stdout.on('data', (line: string) => {
