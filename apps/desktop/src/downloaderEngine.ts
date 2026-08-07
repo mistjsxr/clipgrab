@@ -1,11 +1,13 @@
 import { Command } from '@tauri-apps/plugin-shell';
 import { createNeonClient, mediaQueue, eq } from '@clipgrab/db';
 import { MediaJob } from '@clipgrab/types';
+import { cleanMediaUrl } from '@clipgrab/core-downloader';
 
 export interface DownloadConfig {
   downloadPath: string;
-  quality: 'best' | '1080p' | '720p' | '480p' | 'audio';
-  format: 'mp4' | 'mkv' | 'webm' | 'mp3';
+  quality: 'best' | '4k' | '1080p' | '720p' | '480p' | 'audio';
+  container: 'mp4' | 'mkv' | 'webm' | 'mp3' | 'mov' | 'avi';
+  videoCodec: 'auto' | 'h264' | 'h265' | 'av1' | 'vp9';
   audioQuality: 'best' | '320k' | '256k' | '128k';
   useGalleryDlForPhotos: boolean;
   toolPreference: 'auto' | 'ytdlp' | 'gallerydl';
@@ -15,7 +17,8 @@ export interface DownloadConfig {
 export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
   downloadPath: '~/Downloads/ClipGrab',
   quality: 'best',
-  format: 'mp4',
+  container: 'mp4',
+  videoCodec: 'auto',
   audioQuality: 'best',
   useGalleryDlForPhotos: true,
   toolPreference: 'auto',
@@ -63,10 +66,8 @@ export async function detectInstalledBrowsers(): Promise<Array<{ id: string; nam
 }
 
 export function isPhotoUrl(url: string, platform: string): boolean {
-  if (platform === 'instagram' && !url.includes('/reel/') && !url.includes('/tv/')) {
-    return true;
-  }
-  if (platform === 'twitter' && (url.includes('/photo/') || url.includes('/status/'))) {
+  // Only return true for explicit photo posts, not Instagram /p/ links which are often Reels
+  if (platform === 'twitter' && url.includes('/photo/')) {
     return true;
   }
   return false;
@@ -119,6 +120,7 @@ export async function executeJobDownload(
   onLogOutput?: (jobId: string, type: 'stdout' | 'stderr' | 'info', text: string) => void
 ): Promise<{ success: boolean; filePath?: string; error?: string }> {
   const db = createNeonClient(dbUrl);
+  const targetUrl = cleanMediaUrl(job.url);
 
   // Update status to 'downloading'
   try {
@@ -138,7 +140,7 @@ export async function executeJobDownload(
   } else if (config.toolPreference === 'ytdlp') {
     useGalleryDl = false;
   } else {
-    useGalleryDl = config.useGalleryDlForPhotos && isPhotoUrl(job.url, job.platform);
+    useGalleryDl = config.useGalleryDlForPhotos && isPhotoUrl(targetUrl, job.platform);
   }
 
   if (useGalleryDl) {
@@ -177,13 +179,14 @@ export async function executeJobDownload(
         const outputDir = config.downloadPath.startsWith('~')
           ? config.downloadPath.replace('~', process.env.HOME || '/Users/mistjs')
           : config.downloadPath;
-        args = ['-d', outputDir];
+        // Pass -o path={} to force flat directory saving without nested subfolders
+        args = ['-d', outputDir, '-o', 'path={}'];
 
         if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
           args.push('--cookies-from-browser', config.cookiesBrowser);
         }
 
-        args.push(job.url);
+        args.push(targetUrl);
       } else {
         toolBinary = 'yt-dlp';
         const outputTemplate = config.downloadPath.startsWith('~')
@@ -196,13 +199,29 @@ export async function executeJobDownload(
           args.push('--cookies-from-browser', config.cookiesBrowser);
         }
 
-        if (config.format === 'mp3' || config.quality === 'audio') {
+        // Codec preference sorting (-S)
+        if (config.videoCodec && config.videoCodec !== 'auto') {
+          if (config.videoCodec === 'h264') {
+            args.push('-S', 'vcodec:h264,res,acodec');
+          } else if (config.videoCodec === 'h265') {
+            args.push('-S', 'vcodec:hevc,res,acodec');
+          } else if (config.videoCodec === 'av1') {
+            args.push('-S', 'vcodec:av01,res,acodec');
+          } else if (config.videoCodec === 'vp9') {
+            args.push('-S', 'vcodec:vp9,res,acodec');
+          }
+        }
+
+        // Quality & Format rules
+        if (config.container === 'mp3' || config.quality === 'audio') {
           args.push('-x', '--audio-format', 'mp3');
           if (config.audioQuality !== 'best') {
             args.push('--audio-quality', config.audioQuality);
           }
         } else {
-          if (config.quality === '1080p') {
+          if (config.quality === '4k') {
+            args.push('-f', 'bestvideo[height<=2160]+bestaudio/best[height<=2160]/best');
+          } else if (config.quality === '1080p') {
             args.push('-f', 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best');
           } else if (config.quality === '720p') {
             args.push('-f', 'bestvideo[height<=720]+bestaudio/best[height<=720]/best');
@@ -211,10 +230,10 @@ export async function executeJobDownload(
           } else {
             args.push('-f', 'bestvideo+bestaudio/best');
           }
-          args.push('--merge-output-format', config.format);
+          args.push('--merge-output-format', config.container || 'mp4');
         }
 
-        args.push(job.url);
+        args.push(targetUrl);
       }
 
       const commandToExec = `${MACOS_PATH_ENV} ${toolBinary} ${args.map((a) => `"${a}"`).join(' ')}`;

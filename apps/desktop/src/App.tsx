@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Card, Input, QRCodeView, StatusBadge } from '@clipgrab/ui';
-import { createNeonClient, verifyNeonConnection, initializeDatabaseTables, mediaQueue } from '@clipgrab/db';
-import { isValidMediaUrl, createMediaJobPayload } from '@clipgrab/core-downloader';
+import { createNeonClient, verifyNeonConnection, initializeDatabaseTables, mediaQueue, eq } from '@clipgrab/db';
+import { isValidMediaUrl, createMediaJobPayload, cleanMediaUrl } from '@clipgrab/core-downloader';
 import { MediaJob, PairingPayload } from '@clipgrab/types';
-import { Download, QrCode, Database, RefreshCw, Copy, Check, Plus, Monitor, ShieldCheck, Link2, Server, Trash2, Cpu, Laptop, Play, Settings2, FolderOpen, Ban, RotateCcw, Terminal } from 'lucide-react';
+import { Download, QrCode, Database, RefreshCw, Copy, Check, Plus, Monitor, ShieldCheck, Link2, Server, Trash2, Cpu, Laptop, Play, Settings2, FolderOpen, Ban, RotateCcw, Terminal, Sparkles } from 'lucide-react';
 import { DownloadSettingsModal } from './components/DownloadSettingsModal';
 import { CommandConsoleModal } from './components/CommandConsoleModal';
 import { DownloadConfig, DEFAULT_DOWNLOAD_CONFIG, executeJobDownload, cancelJobDownload, deleteJobFromQueue } from './downloaderEngine';
@@ -192,6 +192,31 @@ export default function App() {
     setShowSettingsModal(true);
   };
 
+  // Optimize & clean all URLs in DB queue
+  const handleOptimizeQueueUrls = async () => {
+    if (!dbUrl) return;
+    const client = createNeonClient(dbUrl);
+    let count = 0;
+
+    for (const job of jobs) {
+      const cleaned = cleanMediaUrl(job.url);
+      if (cleaned !== job.url) {
+        count++;
+        await client
+          .update(mediaQueue)
+          .set({ url: cleaned, updatedAt: new Date() })
+          .where(eq(mediaQueue.id, job.id))
+          .catch(console.error);
+      }
+    }
+
+    if (count > 0) {
+      alert(`Optimized & cleaned ${count} tracking URLs in your database queue!`);
+    } else {
+      alert('All URLs in queue are already clean & optimized!');
+    }
+  };
+
   // Confirmed execution from DownloadSettingsModal
   const handleConfirmedDownload = async (confirmedConfig: DownloadConfig) => {
     if (targetDownloadJobs.length === 0) return;
@@ -248,6 +273,10 @@ export default function App() {
 
   const pendingJobsCount = jobs.filter((j) => j.status === 'pending').length;
   const downloadingJobsCount = jobs.filter((j) => j.status === 'downloading').length;
+
+  const unoptimizedCount = jobs.filter((j) => {
+    return j.url.includes('?') && (j.url.includes('igsh=') || j.url.includes('hl=') || j.url.includes('utm_') || j.url.includes('si='));
+  }).length;
 
   // Render ONBOARDING WIZARD if DB is not configured
   if (!isConfigured) {
@@ -364,8 +393,8 @@ export default function App() {
             </div>
             <div className="p-3 bg-slate-950/80 border border-slate-900 rounded-md space-y-1.5 text-xs text-slate-400 font-mono">
               <div className="flex justify-between">
-                <span>Format:</span>
-                <span className="text-slate-200 uppercase font-bold">{downloadConfig.format}</span>
+                <span>Container:</span>
+                <span className="text-slate-200 uppercase font-bold">{downloadConfig.container}</span>
               </div>
               <div className="flex justify-between">
                 <span>Quality:</span>
@@ -424,6 +453,17 @@ export default function App() {
             
             {/* Top Right Controls */}
             <div className="flex items-center space-x-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 px-3 text-xs border-amber-500/30 text-amber-300 hover:bg-amber-950/20 disabled:opacity-40"
+                onClick={handleOptimizeQueueUrls}
+                disabled={unoptimizedCount === 0}
+              >
+                <Sparkles className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
+                Optimize URLs ({unoptimizedCount})
+              </Button>
+
               <Button
                 variant="outline"
                 size="sm"

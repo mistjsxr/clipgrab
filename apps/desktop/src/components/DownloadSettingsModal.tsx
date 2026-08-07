@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Button, Card } from '@clipgrab/ui';
 import { open } from '@tauri-apps/plugin-dialog';
 import { DownloadConfig, checkToolAvailability, detectInstalledBrowsers } from '../downloaderEngine';
-import { Folder, Settings2, CheckCircle2, XCircle, Sliders, Film, Music, Image as ImageIcon, Play, Wrench, Cookie, ShieldAlert, Globe } from 'lucide-react';
+import { Folder, Settings2, CheckCircle2, XCircle, Sliders, Film, Music, Image as ImageIcon, Play, Wrench, Cookie, ShieldAlert, Cpu } from 'lucide-react';
 
 export interface DownloadSettingsModalProps {
   isOpen: boolean;
@@ -32,7 +32,12 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
   const [installedBrowsers, setInstalledBrowsers] = useState<Array<{ id: string; name: string; installed: boolean }>>([]);
 
   useEffect(() => {
-    setLocalConfig(config);
+    // Migration helper if format was previously used instead of container
+    const initialConfig = { ...config };
+    if ((config as any).format && !config.container) {
+      initialConfig.container = (config as any).format;
+    }
+    setLocalConfig(initialConfig);
   }, [config]);
 
   useEffect(() => {
@@ -82,7 +87,7 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
               <h2 className="text-sm font-black uppercase tracking-wider text-slate-100">
                 {title || 'Media Download Options'}
               </h2>
-              <p className="text-[10px] text-slate-500">Configure save destination, format, codecs, and engine tools.</p>
+              <p className="text-[10px] text-slate-500">Configure destination, container format, video codec, and session cookies.</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-500 hover:text-cyber-pink text-xs font-bold transition-colors">
@@ -98,7 +103,7 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
               {toolsStatus.ytdlp ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <XCircle className="w-3.5 h-3.5 text-cyber-pink" />}
               <span className="text-[10px] font-mono font-bold text-slate-300">yt-dlp</span>
             </div>
-            <div className="flex items-center space-x-1.5 bg-slate-950 p-2 rounded border border-slate-950">
+            <div className="flex items-center space-x-1.5 bg-slate-950 p-2 rounded border border-slate-900">
               {toolsStatus.ffmpeg ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <XCircle className="w-3.5 h-3.5 text-amber-400" />}
               <span className="text-[10px] font-mono font-bold text-slate-300">ffmpeg</span>
             </div>
@@ -164,26 +169,10 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
 
           {/* Grid Options */}
           <div className="grid grid-cols-2 gap-4">
-            {/* Download Engine Preference */}
-            <div className="space-y-1.5 col-span-2">
-              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
-                <Wrench className="w-3 h-3 mr-1 text-cyber-cyan" /> CLI Execution Tool
-              </label>
-              <select
-                value={localConfig.toolPreference || 'auto'}
-                onChange={(e) => setLocalConfig({ ...localConfig, toolPreference: e.target.value as any })}
-                className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
-              >
-                <option value="auto">Auto-Detect (yt-dlp for video, gallery-dl for photos)</option>
-                <option value="ytdlp">Force yt-dlp Engine</option>
-                <option value="gallerydl">Force gallery-dl Engine</option>
-              </select>
-            </div>
-
-            {/* Resolution */}
+            {/* Resolution / Quality */}
             <div className="space-y-1.5">
               <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
-                <Film className="w-3 h-3 mr-1 text-cyber-pink" /> Resolution Quality
+                <Film className="w-3 h-3 mr-1 text-cyber-pink" /> Quality / Resolution
               </label>
               <select
                 value={localConfig.quality}
@@ -191,6 +180,7 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
                 className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
               >
                 <option value="best">Best Available (Highest)</option>
+                <option value="4k">4K (2160p Ultra HD)</option>
                 <option value="1080p">1080p Full HD</option>
                 <option value="720p">720p HD</option>
                 <option value="480p">480p SD</option>
@@ -198,20 +188,40 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
               </select>
             </div>
 
-            {/* Container Format */}
+            {/* Container Extension Format */}
             <div className="space-y-1.5">
               <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
-                <Settings2 className="w-3 h-3 mr-1 text-cyber-cyan" /> Container / Format
+                <Settings2 className="w-3 h-3 mr-1 text-cyber-cyan" /> File Container Format
               </label>
               <select
-                value={localConfig.format}
-                onChange={(e) => setLocalConfig({ ...localConfig, format: e.target.value as any })}
+                value={localConfig.container || 'mp4'}
+                onChange={(e) => setLocalConfig({ ...localConfig, container: e.target.value as any })}
                 className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
               >
-                <option value="mp4">MP4 (H.264 + AAC Compatible)</option>
-                <option value="mkv">MKV (Matroska)</option>
-                <option value="webm">WEBM (VP9)</option>
-                <option value="mp3">MP3 (Audio Extraction)</option>
+                <option value="mp4">MP4 (.mp4 - MPEG-4)</option>
+                <option value="mkv">MKV (.mkv - Matroska)</option>
+                <option value="webm">WEBM (.webm - Web Media)</option>
+                <option value="mov">MOV (.mov - Apple QuickTime)</option>
+                <option value="avi">AVI (.avi - Audio Video Interleave)</option>
+                <option value="mp3">MP3 (.mp3 - Audio Only)</option>
+              </select>
+            </div>
+
+            {/* Video Codec Selection */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
+                <Cpu className="w-3 h-3 mr-1 text-violet-400" /> Video Codec Encoding
+              </label>
+              <select
+                value={localConfig.videoCodec || 'auto'}
+                onChange={(e) => setLocalConfig({ ...localConfig, videoCodec: e.target.value as any })}
+                className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
+              >
+                <option value="auto">Auto (Best Hardware Compatibility)</option>
+                <option value="h264">H.264 / AVC (Most Compatible)</option>
+                <option value="h265">H.265 / HEVC (High Efficiency)</option>
+                <option value="av1">AV1 (Next-Gen Open Codec)</option>
+                <option value="vp9">VP9 (Google WebM Standard)</option>
               </select>
             </div>
 
@@ -229,6 +239,22 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
                 <option value="320k">320 kbps CBR</option>
                 <option value="256k">256 kbps</option>
                 <option value="128k">128 kbps</option>
+              </select>
+            </div>
+
+            {/* Download Engine Preference */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
+                <Wrench className="w-3 h-3 mr-1 text-cyber-cyan" /> CLI Execution Tool
+              </label>
+              <select
+                value={localConfig.toolPreference || 'auto'}
+                onChange={(e) => setLocalConfig({ ...localConfig, toolPreference: e.target.value as any })}
+                className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
+              >
+                <option value="auto">Auto-Detect (yt-dlp for video, gallery-dl for photos)</option>
+                <option value="ytdlp">Force yt-dlp Engine</option>
+                <option value="gallerydl">Force gallery-dl Engine</option>
               </select>
             </div>
 
