@@ -11,10 +11,10 @@ export interface StatusBadgeProps {
 
 export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, className }) => {
   const styles: Record<StatusType, string> = {
-    pending: 'bg-amber-950/60 text-amber-400 border-amber-800/60',
-    downloading: 'bg-indigo-950/60 text-indigo-400 border-indigo-800/60 animate-pulse',
-    completed: 'bg-emerald-950/60 text-emerald-400 border-emerald-800/60',
-    failed: 'bg-rose-950/60 text-rose-400 border-rose-800/60',
+    pending: 'bg-amber-950/30 text-amber-400 border-amber-500/30',
+    downloading: 'bg-cyber-cyan/10 text-cyber-cyan border-cyber-cyan/30 animate-pulse shadow-[0_0_10px_rgba(0,240,255,0.15)]',
+    completed: 'bg-emerald-950/30 text-emerald-400 border-emerald-500/30',
+    failed: 'bg-cyber-pink/10 text-cyber-pink border-cyber-pink/30',
   };
 
   const labels: Record<StatusType, string> = {
@@ -28,7 +28,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, className }) =
     <span
       className={twMerge(
         clsx(
-          'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border',
+          'inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border',
           styles[status],
           className
         )

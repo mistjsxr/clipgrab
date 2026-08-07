@@ -6,11 +6,6 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#020617"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.clipgrab.mobile"
@@ -28,7 +23,16 @@
         {
           "cameraPermission": "Allow ClipGrab to access camera to scan the Desktop QR pairing code."
         }
-      ]
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#020617"
+        }
+      ],
+      "expo-secure-store"
     ]
   }
 }

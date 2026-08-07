@@ -12,10 +12,10 @@ export const Card: React.FC<CardProps> = ({ children, glass = true, className, .
     <div
       className={twMerge(
         clsx(
-          'rounded-xl border p-6 shadow-xl transition-all',
+          'rounded-lg border p-6 shadow-2xl transition-all duration-300',
           glass
-            ? 'bg-slate-900/60 backdrop-blur-xl border-slate-800/80 text-slate-100'
-            : 'bg-slate-900 border-slate-800 text-slate-100',
+            ? 'bg-slate-950/50 backdrop-blur-md border-cyber-purple/25 shadow-cyber-purple/5 text-slate-100'
+            : 'bg-slate-950 border-slate-900 text-slate-100',
           className
         )
       )}

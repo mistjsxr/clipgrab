@@ -1,0 +1,42 @@
+{
+  "identifier": "default",
+  "description": "Permissions for main desktop window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "dialog:allow-open",
+    "clipboard-manager:default",
+    "shell:allow-open",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "sh",
+          "cmd": "sh",
+          "args": true
+        },
+        {
+          "name": "exec-sh",
+          "cmd": "sh",
+          "args": true
+        },
+        {
+          "name": "bash",
+          "cmd": "bash",
+          "args": true
+        },
+        {
+          "name": "yt-dlp",
+          "cmd": "yt-dlp",
+          "args": true
+        },
+        {
+          "name": "gallery-dl",
+          "cmd": "gallery-dl",
+          "args": true
+        }
+      ]
+    }
+  ]
+}

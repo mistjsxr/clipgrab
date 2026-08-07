@@ -12,7 +12,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
-import { Camera, CameraView, useCameraPermissions } from 'expo-camera';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { createNeonClient, mediaQueue } from '@clipgrab/db';
 import { isValidMediaUrl, createMediaJobPayload } from '@clipgrab/core-downloader';
 import { MediaJob, PairingPayload } from '@clipgrab/types';
@@ -117,6 +117,25 @@ export default function App() {
     }
   };
 
+  const handleReset = async () => {
+    Alert.alert(
+      'Reset Connection',
+      'Are you sure you want to clear pairing settings?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: async () => {
+            await SecureStore.deleteItemAsync(SECURE_STORE_KEY);
+            setPairingPayload(null);
+            setJobs([]);
+          },
+        },
+      ]
+    );
+  };
+
   // Scanner View
   if (scanning) {
     if (!permission?.granted) {
@@ -152,32 +171,43 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#020617" />
+      <StatusBar barStyle="light-content" backgroundColor="#060814" />
       <View style={styles.header}>
-        <Text style={styles.title}>ClipGrab Mobile</Text>
-        <Text style={styles.subtitle}>Cross-Device Media Grabber</Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <View>
+            <Text style={styles.title}>
+              CLIP<Text style={{ color: '#ff007f' }}>GRAB</Text>
+            </Text>
+            <Text style={styles.subtitle}>CROSS-DEVICE MEDIA SYNC</Text>
+          </View>
+          {pairingPayload && (
+            <TouchableOpacity style={styles.resetButton} onPress={handleReset}>
+              <Text style={styles.resetButtonText}>RESET</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       <View style={styles.body}>
         {!pairingPayload ? (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Pair with Mac Command Center</Text>
+            <Text style={styles.cardTitle}>PAIR DEVICE</Text>
             <Text style={styles.cardText}>
-              Scan the QR code displayed on your ClipGrab Desktop screen to connect your serverless Neon Database.
+              Scan the setup QR code displayed in your ClipGrab Desktop dashboard to automatically connect your serverless Neon Postgres instance.
             </Text>
             <TouchableOpacity style={styles.button} onPress={() => setScanning(true)}>
-              <Text style={styles.buttonText}>Scan Desktop QR Code</Text>
+              <Text style={styles.buttonText}>SCAN DESKTOP QR</Text>
             </TouchableOpacity>
           </View>
         ) : (
           <View style={styles.mainContent}>
             {/* Input Bar */}
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>Send Link to Mac</Text>
+              <Text style={styles.cardTitle}>SEND LINK TO QUEUE</Text>
               <TextInput
                 style={styles.input}
                 placeholder="Paste video/audio URL..."
-                placeholderTextColor="#64748b"
+                placeholderTextColor="#3e4a68"
                 value={urlInput}
                 onChangeText={setUrlInput}
                 autoCapitalize="none"
@@ -186,16 +216,16 @@ export default function App() {
                 {loading ? (
                   <ActivityIndicator color="#ffffff" />
                 ) : (
-                  <Text style={styles.buttonText}>Enqueue Task to Mac</Text>
+                  <Text style={styles.buttonText}>ENQUEUE TASK</Text>
                 )}
               </TouchableOpacity>
             </View>
 
             {/* Queue List */}
             <View style={styles.queueHeader}>
-              <Text style={styles.queueTitle}>Shared Downloads Queue</Text>
+              <Text style={styles.queueTitle}>MEDIA QUEUE</Text>
               <TouchableOpacity onPress={() => fetchQueue(pairingPayload.databaseUrl)}>
-                <Text style={styles.refreshText}>Refresh</Text>
+                <Text style={styles.refreshText}>REFRESH QUEUE</Text>
               </TouchableOpacity>
             </View>
 
@@ -204,11 +234,13 @@ export default function App() {
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
                 <View style={styles.jobItem}>
-                  <View style={{ flex: 1 }}>
+                  <View style={{ flex: 1, paddingRight: 8 }}>
                     <Text style={styles.jobTitle} numberOfLines={1}>
                       {item.title || item.url}
                     </Text>
-                    <Text style={styles.jobSub}>{item.platform.toUpperCase()} • {item.requestedByDeviceId}</Text>
+                    <Text style={styles.jobSub}>
+                      {item.platform.toUpperCase()} • NODE: {item.requestedByDeviceId.toUpperCase()}
+                    </Text>
                   </View>
                   <Text
                     style={[
@@ -217,6 +249,8 @@ export default function App() {
                         ? styles.statusCompleted
                         : item.status === 'downloading'
                         ? styles.statusDownloading
+                        : item.status === 'failed'
+                        ? styles.statusFailed
                         : styles.statusPending,
                     ]}
                   >
@@ -234,30 +268,33 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#020617' },
-  header: { padding: 20, borderBottomWidth: 1, borderBottomColor: '#1e293b' },
-  title: { fontSize: 22, fontWeight: 'bold', color: '#818cf8' },
-  subtitle: { fontSize: 13, color: '#94a3b8', marginTop: 2 },
+  container: { flex: 1, backgroundColor: '#060814' },
+  header: { paddingHorizontal: 20, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#101426' },
+  title: { fontSize: 20, fontWeight: '900', letterSpacing: 1.5, color: '#8b5cf6' },
+  subtitle: { fontSize: 9, color: '#4a5578', fontWeight: '900', letterSpacing: 1, marginTop: 2 },
   body: { flex: 1, padding: 16 },
   centerBox: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
   mainContent: { flex: 1 },
-  card: { backgroundColor: '#0f172a', borderRadius: 16, padding: 18, borderWidth: 1, borderColor: '#1e293b', marginBottom: 16 },
-  cardTitle: { fontSize: 16, fontWeight: '600', color: '#f8fafc', marginBottom: 8 },
-  cardText: { fontSize: 13, color: '#94a3b8', lineHeight: 18, marginBottom: 14 },
-  input: { backgroundColor: '#020617', borderWidth: 1, borderColor: '#334155', borderRadius: 8, padding: 12, color: '#f8fafc', marginBottom: 12, fontSize: 14 },
-  button: { backgroundColor: '#4f46e5', paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
-  buttonText: { color: '#ffffff', fontWeight: '600', fontSize: 14 },
+  card: { backgroundColor: '#0a0d1c', borderRadius: 8, padding: 18, borderWidth: 1, borderColor: '#101426', marginBottom: 16 },
+  cardTitle: { fontSize: 11, fontWeight: '900', letterSpacing: 1, color: '#00f0ff', marginBottom: 8 },
+  cardText: { fontSize: 13, color: '#7a88b0', lineHeight: 18, marginBottom: 14 },
+  input: { backgroundColor: '#060814', borderWidth: 1, borderColor: '#1a203a', borderRadius: 6, padding: 12, color: '#f8fafc', marginBottom: 12, fontSize: 13, fontFamily: 'System' },
+  button: { backgroundColor: '#8b5cf6', paddingVertical: 12, borderRadius: 6, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: '#6d28d9' },
+  buttonText: { color: '#ffffff', fontWeight: '900', fontSize: 11, letterSpacing: 1 },
+  resetButton: { paddingVertical: 6, paddingHorizontal: 12, borderWidth: 1, borderColor: '#ff007f50', borderRadius: 4 },
+  resetButtonText: { color: '#ff007f', fontWeight: '900', fontSize: 9, letterSpacing: 1 },
   scannerOverlay: { position: 'absolute', bottom: 40, left: 20, right: 20 },
-  closeButton: { backgroundColor: '#e11d48', padding: 14, borderRadius: 10, alignItems: 'center' },
-  queueHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  queueTitle: { color: '#f8fafc', fontSize: 16, fontWeight: '600' },
-  refreshText: { color: '#818cf8', fontSize: 13 },
-  jobItem: { backgroundColor: '#0f172a', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#1e293b', marginBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  jobTitle: { color: '#f8fafc', fontSize: 14, fontWeight: '500' },
-  jobSub: { color: '#64748b', fontSize: 11, marginTop: 2 },
-  statusBadge: { fontSize: 11, fontWeight: '600', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, textTransform: 'capitalize' },
-  statusPending: { backgroundColor: '#451a03', color: '#f59e0b' },
-  statusDownloading: { backgroundColor: '#1e1b4b', color: '#818cf8' },
-  statusCompleted: { backgroundColor: '#064e3b', color: '#34d399' },
-  emptyText: { color: '#64748b', fontSize: 13, textAlign: 'center', marginTop: 20 },
+  closeButton: { backgroundColor: '#ff007f', padding: 14, borderRadius: 6, alignItems: 'center' },
+  queueHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, marginTop: 8 },
+  queueTitle: { color: '#4a5578', fontSize: 11, fontWeight: '900', letterSpacing: 1 },
+  refreshText: { color: '#8b5cf6', fontSize: 11, fontWeight: '700' },
+  jobItem: { backgroundColor: '#0a0d1c', borderRadius: 8, padding: 12, borderWidth: 1, borderColor: '#101426', marginBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  jobTitle: { color: '#f8fafc', fontSize: 13, fontWeight: '700' },
+  jobSub: { color: '#4a5578', fontSize: 9, fontWeight: '700', marginTop: 3 },
+  statusBadge: { fontSize: 9, fontWeight: '900', letterSpacing: 0.5, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, textTransform: 'uppercase', borderWidth: 1 },
+  statusPending: { backgroundColor: '#2d1a03', color: '#f59e0b', borderColor: '#d9770640' },
+  statusDownloading: { backgroundColor: '#022329', color: '#00f0ff', borderColor: '#00f0ff40' },
+  statusCompleted: { backgroundColor: '#022e1b', color: '#34d399', borderColor: '#05966940' },
+  statusFailed: { backgroundColor: '#2d020d', color: '#ff007f', borderColor: '#e11d4840' },
+  emptyText: { color: '#3e4a68', fontSize: 12, textAlign: 'center', marginTop: 30, fontWeight: '500' },
 });

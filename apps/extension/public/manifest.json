@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "ClipGrab Extension",
+  "version": "0.1.0",
+  "description": "Send links instantly to your ClipGrab Desktop Command Center via serverless Neon DB",
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*/*"
+  ],
+  "action": {
+    "default_popup": "src/popup/index.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}

@@ -14,13 +14,13 @@ export const Button: React.FC<ButtonProps> = ({
   className,
   ...props
 }) => {
-  const baseStyles = 'inline-flex items-center justify-center font-medium rounded-lg transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed';
+  const baseStyles = 'inline-flex items-center justify-center font-semibold rounded-md border tracking-wide transition-all duration-300 focus:outline-none focus:ring-1 disabled:opacity-40 disabled:cursor-not-allowed';
   
   const variants = {
-    primary: 'bg-indigo-600 hover:bg-indigo-500 text-white focus:ring-indigo-500 shadow-lg shadow-indigo-500/25',
-    secondary: 'bg-slate-800 hover:bg-slate-700 text-slate-100 focus:ring-slate-600',
-    danger: 'bg-rose-600 hover:bg-rose-500 text-white focus:ring-rose-500',
-    outline: 'border border-slate-700 hover:bg-slate-800 text-slate-300 focus:ring-slate-600',
+    primary: 'bg-gradient-to-r from-cyber-purple to-cyber-pink hover:from-cyber-pink hover:to-cyber-purple text-white border-transparent shadow-[0_0_15px_rgba(255,0,127,0.35)] hover:shadow-[0_0_25px_rgba(255,0,127,0.6)] focus:ring-cyber-pink',
+    secondary: 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-800 hover:border-cyber-cyan focus:ring-cyber-cyan shadow-sm',
+    danger: 'bg-red-950/40 hover:bg-red-900/60 text-red-400 border-red-900/80 hover:border-red-500 focus:ring-red-500 shadow-sm',
+    outline: 'bg-transparent hover:bg-cyber-purple/10 text-cyber-purple border-cyber-purple/50 hover:border-cyber-purple focus:ring-cyber-purple',
   };
 
   const sizes = {
