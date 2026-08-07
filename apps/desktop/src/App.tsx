@@ -3,8 +3,9 @@ import { Button, Card, Input, QRCodeView, StatusBadge } from '@clipgrab/ui';
 import { createNeonClient, verifyNeonConnection, initializeDatabaseTables, mediaQueue } from '@clipgrab/db';
 import { isValidMediaUrl, createMediaJobPayload } from '@clipgrab/core-downloader';
 import { MediaJob, PairingPayload } from '@clipgrab/types';
-import { Download, QrCode, Database, RefreshCw, Copy, Check, Plus, Monitor, ShieldCheck, Link2, Server, Trash2, Cpu, Laptop, Play, Settings2, FolderOpen, X, Ban, RotateCcw } from 'lucide-react';
+import { Download, QrCode, Database, RefreshCw, Copy, Check, Plus, Monitor, ShieldCheck, Link2, Server, Trash2, Cpu, Laptop, Play, Settings2, FolderOpen, Ban, RotateCcw, Terminal } from 'lucide-react';
 import { DownloadSettingsModal } from './components/DownloadSettingsModal';
+import { CommandConsoleModal } from './components/CommandConsoleModal';
 import { DownloadConfig, DEFAULT_DOWNLOAD_CONFIG, executeJobDownload, cancelJobDownload, deleteJobFromQueue } from './downloaderEngine';
 
 const LOCAL_STORAGE_DB_KEY = 'clipgrab_db_url';
@@ -26,9 +27,11 @@ export default function App() {
   const [pairingPayloadBase64, setPairingPayloadBase64] = useState('');
   const [copiedPairingKey, setCopiedPairingKey] = useState(false);
 
-  // Download Engine state
+  // Download Engine & Terminal Console state
   const [downloadConfig, setDownloadConfig] = useState<DownloadConfig>(DEFAULT_DOWNLOAD_CONFIG);
   const [isDownloadingBatch, setIsDownloadingBatch] = useState(false);
+  const [jobLogs, setJobLogs] = useState<Record<string, string[]>>({});
+  const [activeConsoleJob, setActiveConsoleJob] = useState<MediaJob | null>(null);
 
   // Load existing credentials & download config on startup
   useEffect(() => {
@@ -164,18 +167,38 @@ export default function App() {
     }
   };
 
-  const handleDownloadSingleJob = async (job: MediaJob) => {
+  const appendJobLog = (jobId: string, text: string) => {
+    setJobLogs((prev) => ({
+      ...prev,
+      [jobId]: [...(prev[jobId] || []), text],
+    }));
+  };
+
+  const handleDownloadSingleJob = async (job: MediaJob, openConsole = true) => {
+    if (openConsole) {
+      setActiveConsoleJob(job);
+    }
     try {
       setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: 'downloading', progress: 5 } : j)));
-      await executeJobDownload(job, downloadConfig, dbUrl, (jobId, progress, status) => {
-        setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, progress, status } : j)));
-      });
+      
+      await executeJobDownload(
+        job,
+        downloadConfig,
+        dbUrl,
+        (jobId, progress, status) => {
+          setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, progress, status } : j)));
+        },
+        (jobId, _type, text) => {
+          appendJobLog(jobId, text);
+        }
+      );
     } catch (err) {
       console.error('Failed to download single job:', err);
     }
   };
 
   const handleCancelJob = async (jobId: string) => {
+    appendJobLog(jobId, '[SYSTEM] User requested process cancellation...');
     setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, status: 'failed', error: 'Cancelled' } : j)));
     await cancelJobDownload(jobId, dbUrl);
   };
@@ -192,11 +215,22 @@ export default function App() {
       return;
     }
 
+    // Open terminal console for the first pending job
+    setActiveConsoleJob(pendingJobs[0]);
     setIsDownloadingBatch(true);
+
     for (const job of pendingJobs) {
-      await executeJobDownload(job, downloadConfig, dbUrl, (jobId, progress, status) => {
-        setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, progress, status } : j)));
-      });
+      await executeJobDownload(
+        job,
+        downloadConfig,
+        dbUrl,
+        (jobId, progress, status) => {
+          setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, progress, status } : j)));
+        },
+        (jobId, _type, text) => {
+          appendJobLog(jobId, text);
+        }
+      );
     }
     setIsDownloadingBatch(false);
   };
@@ -402,7 +436,7 @@ export default function App() {
                 variant="primary"
                 size="sm"
                 className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-violet-600 to-pink-500 hover:from-pink-500 hover:to-violet-600 disabled:opacity-50"
-                onClick={() => setShowSettingsModal(true)}
+                onClick={handleStartBatchDownload}
                 disabled={isDownloadingBatch || (pendingJobsCount === 0 && downloadingJobsCount === 0)}
               >
                 {isDownloadingBatch ? (
@@ -517,6 +551,15 @@ export default function App() {
                           </td>
                           <td className="py-4 px-5 text-right">
                             <div className="flex items-center justify-end space-x-2">
+                              {/* Terminal Logs Icon Button for any job */}
+                              <button
+                                onClick={() => setActiveConsoleJob(job)}
+                                className="p-1.5 rounded text-slate-500 hover:text-cyan-400 hover:bg-slate-900 transition-colors"
+                                title="View CLI Terminal Logs"
+                              >
+                                <Terminal className="w-3.5 h-3.5" />
+                              </button>
+
                               {job.status === 'pending' && (
                                 <>
                                   <Button
@@ -600,6 +643,19 @@ export default function App() {
           </Card>
         </div>
       </main>
+
+      {/* Live Command Console Terminal Modal */}
+      <CommandConsoleModal
+        isOpen={activeConsoleJob !== null}
+        onClose={() => setActiveConsoleJob(null)}
+        job={activeConsoleJob}
+        logs={activeConsoleJob ? jobLogs[activeConsoleJob.id] || [] : []}
+        onClearLogs={() => {
+          if (activeConsoleJob) {
+            setJobLogs((prev) => ({ ...prev, [activeConsoleJob.id]: [] }));
+          }
+        }}
+      />
 
       {/* Download Settings Modal */}
       <DownloadSettingsModal

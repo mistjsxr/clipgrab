@@ -84,7 +84,8 @@ export async function executeJobDownload(
   job: MediaJob,
   config: DownloadConfig,
   dbUrl: string,
-  onProgress?: (jobId: string, progress: number, status: MediaJob['status']) => void
+  onProgress?: (jobId: string, progress: number, status: MediaJob['status']) => void,
+  onLogOutput?: (jobId: string, type: 'stdout' | 'stderr' | 'info', text: string) => void
 ): Promise<{ success: boolean; filePath?: string; error?: string }> {
   const db = createNeonClient(dbUrl);
 
@@ -99,7 +100,31 @@ export async function executeJobDownload(
     console.error('Failed to set downloading status in DB:', err);
   }
 
-  const useGalleryDl = config.useGalleryDlForPhotos && isPhotoUrl(job.url, job.platform);
+  // Smart Tool Check & Fallback
+  let useGalleryDl = config.useGalleryDlForPhotos && isPhotoUrl(job.url, job.platform);
+  if (useGalleryDl) {
+    const galleryDlAvailable = await checkToolAvailability('gallery-dl');
+    if (!galleryDlAvailable) {
+      if (onLogOutput) {
+        onLogOutput(job.id, 'info', '[NOTICE] gallery-dl is not installed on PATH. Automatically falling back to yt-dlp...');
+      }
+      useGalleryDl = false;
+    }
+  }
+
+  const ytdlpAvailable = await checkToolAvailability('yt-dlp');
+  if (!ytdlpAvailable && !useGalleryDl) {
+    const errorMsg = 'yt-dlp binary is not installed on system PATH. Install it using "brew install yt-dlp" in your terminal.';
+    if (onLogOutput) {
+      onLogOutput(job.id, 'stderr', `[ERR] ${errorMsg}`);
+    }
+    await db
+      .update(mediaQueue)
+      .set({ status: 'failed', error: errorMsg, updatedAt: new Date() })
+      .where(eq(mediaQueue.id, job.id));
+    if (onProgress) onProgress(job.id, 0, 'failed');
+    return { success: false, error: errorMsg };
+  }
 
   return new Promise((resolve) => {
     let args: string[] = [];
@@ -140,12 +165,20 @@ export async function executeJobDownload(
       args.push(job.url);
     }
 
-    try {
-      const cmd = Command.create('sh', ['-c', `${toolBinary} ${args.map((a) => `"${a}"`).join(' ')}`]);
+    const fullCommandStr = `${toolBinary} ${args.map((a) => `"${a}"`).join(' ')}`;
+    if (onLogOutput) {
+      onLogOutput(job.id, 'info', `$ ${fullCommandStr}`);
+    }
 
+    try {
+      const cmd = Command.create('sh', ['-c', fullCommandStr]);
       let lastProgress = 5;
 
       cmd.stdout.on('data', (line: string) => {
+        if (onLogOutput) {
+          onLogOutput(job.id, 'stdout', line);
+        }
+
         const progressMatch = line.match(/\[download\]\s+(\d+(?:\.\d+)?)%/);
         if (progressMatch) {
           const parsedProgress = Math.min(Math.round(parseFloat(progressMatch[1])), 99);
@@ -161,6 +194,9 @@ export async function executeJobDownload(
       });
 
       cmd.stderr.on('data', (data: string) => {
+        if (onLogOutput) {
+          onLogOutput(job.id, 'stderr', data);
+        }
         console.warn(`[${toolBinary} stderr]:`, data);
       });
 
@@ -168,6 +204,10 @@ export async function executeJobDownload(
         activeChildProcesses.delete(job.id);
 
         if (data.code === 0) {
+          if (onLogOutput) {
+            onLogOutput(job.id, 'info', `✔ Process completed successfully (exit code 0)`);
+          }
+
           await db
             .update(mediaQueue)
             .set({ status: 'completed', progress: 100, updatedAt: new Date() })
@@ -178,6 +218,10 @@ export async function executeJobDownload(
           resolve({ success: true, filePath: config.downloadPath });
         } else {
           const errorMsg = `Process exited with code ${data.code}`;
+          if (onLogOutput) {
+            onLogOutput(job.id, 'stderr', `[ERR] ${errorMsg}`);
+          }
+
           await db
             .update(mediaQueue)
             .set({ status: 'failed', error: errorMsg, updatedAt: new Date() })
@@ -194,6 +238,10 @@ export async function executeJobDownload(
       }).catch(async (err) => {
         activeChildProcesses.delete(job.id);
         const errorMsg = err?.message || `Failed to spawn ${toolBinary}. Ensure ${toolBinary} is installed on PATH.`;
+        if (onLogOutput) {
+          onLogOutput(job.id, 'stderr', `[ERR] ${errorMsg}`);
+        }
+
         await db
           .update(mediaQueue)
           .set({ status: 'failed', error: errorMsg, updatedAt: new Date() })
@@ -206,6 +254,10 @@ export async function executeJobDownload(
     } catch (err: any) {
       activeChildProcesses.delete(job.id);
       const errorMsg = err?.message || 'Download execution error';
+      if (onLogOutput) {
+        onLogOutput(job.id, 'stderr', `[ERR] ${errorMsg}`);
+      }
+
       db.update(mediaQueue)
         .set({ status: 'failed', error: errorMsg, updatedAt: new Date() })
         .where(eq(mediaQueue.id, job.id))
