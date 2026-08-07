@@ -112,6 +112,57 @@ export async function deleteJobFromQueue(jobId: string, dbUrl: string): Promise<
   }
 }
 
+export async function removeDownloadedFileAndResetJob(job: MediaJob, dbUrl: string): Promise<boolean> {
+  if (activeChildProcesses.has(job.id)) {
+    await cancelJobDownload(job.id, dbUrl);
+  }
+
+  if (job.filePath) {
+    try {
+      const cmd = Command.create('sh', ['-c', `rm -f "${job.filePath}"`]);
+      await cmd.execute();
+    } catch (e) {
+      console.error('Failed to remove local file:', e);
+    }
+  }
+
+  try {
+    const db = createNeonClient(dbUrl);
+    await db
+      .update(mediaQueue)
+      .set({ status: 'pending', progress: 0, filePath: null, error: null, updatedAt: new Date() })
+      .where(eq(mediaQueue.id, job.id));
+    return true;
+  } catch (err) {
+    console.error('Failed to reset job in DB:', err);
+    return false;
+  }
+}
+
+export async function deleteJobAndFile(job: MediaJob, dbUrl: string): Promise<boolean> {
+  if (activeChildProcesses.has(job.id)) {
+    await cancelJobDownload(job.id, dbUrl);
+  }
+
+  if (job.filePath) {
+    try {
+      const cmd = Command.create('sh', ['-c', `rm -f "${job.filePath}"`]);
+      await cmd.execute();
+    } catch (e) {
+      console.error('Failed to remove local file:', e);
+    }
+  }
+
+  try {
+    const db = createNeonClient(dbUrl);
+    await db.delete(mediaQueue).where(eq(mediaQueue.id, job.id));
+    return true;
+  } catch (err) {
+    console.error('Failed to delete job from DB:', err);
+    return false;
+  }
+}
+
 export async function executeJobDownload(
   job: MediaJob,
   config: DownloadConfig,

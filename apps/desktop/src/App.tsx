@@ -3,14 +3,30 @@ import { Button, Card, Input, QRCodeView, StatusBadge } from '@clipgrab/ui';
 import { createNeonClient, verifyNeonConnection, initializeDatabaseTables, mediaQueue, eq } from '@clipgrab/db';
 import { isValidMediaUrl, createMediaJobPayload, cleanMediaUrl } from '@clipgrab/core-downloader';
 import { MediaJob, PairingPayload } from '@clipgrab/types';
-import { Download, QrCode, Database, RefreshCw, Copy, Check, Plus, Monitor, ShieldCheck, Link2, Server, Trash2, Cpu, Laptop, Play, Settings2, FolderOpen, Ban, RotateCcw, Terminal, Sparkles } from 'lucide-react';
+import { Download, QrCode, Database, RefreshCw, Copy, Check, Plus, Monitor, ShieldCheck, Link2, Server, Trash2, Cpu, Laptop, Play, Settings2, FolderOpen, Ban, RotateCcw, Terminal, Sparkles, CheckSquare, Square, X } from 'lucide-react';
 import { DownloadSettingsModal } from './components/DownloadSettingsModal';
 import { CommandConsoleModal } from './components/CommandConsoleModal';
-import { DownloadConfig, DEFAULT_DOWNLOAD_CONFIG, executeJobDownload, cancelJobDownload, deleteJobFromQueue } from './downloaderEngine';
+import { DownloadConfig, DEFAULT_DOWNLOAD_CONFIG, executeJobDownload, cancelJobDownload, deleteJobAndFile, removeDownloadedFileAndResetJob } from './downloaderEngine';
 
 const LOCAL_STORAGE_DB_KEY = 'clipgrab_db_url';
 const LOCAL_STORAGE_PASS_KEY = 'clipgrab_pass_id';
 const LOCAL_STORAGE_CONFIG_KEY = 'clipgrab_download_config';
+
+// Dark Theme Cyberpunk Checkbox Component
+const DarkCheckbox: React.FC<{ checked: boolean; onChange: () => void; title?: string }> = ({ checked, onChange, title }) => (
+  <button
+    type="button"
+    onClick={onChange}
+    title={title}
+    className={`w-4 h-4 rounded border transition-all duration-150 flex items-center justify-center cursor-pointer select-none ${
+      checked
+        ? 'bg-violet-600 border-violet-400 text-white shadow-[0_0_10px_rgba(139,92,246,0.5)]'
+        : 'bg-slate-950 border-slate-800 hover:border-violet-500/70 text-transparent'
+    }`}
+  >
+    <Check className="w-3 h-3 stroke-[3]" />
+  </button>
+);
 
 export default function App() {
   const [dbUrl, setDbUrl] = useState('');
@@ -26,6 +42,9 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [pairingPayloadBase64, setPairingPayloadBase64] = useState('');
   const [copiedPairingKey, setCopiedPairingKey] = useState(false);
+
+  // Gmail-style Selection state
+  const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
 
   // Download Engine & Terminal Console state
   const [downloadConfig, setDownloadConfig] = useState<DownloadConfig>(DEFAULT_DOWNLOAD_CONFIG);
@@ -175,6 +194,23 @@ export default function App() {
     }));
   };
 
+  // Gmail-style Selection Handlers
+  const isAllSelected = jobs.length > 0 && selectedJobIds.length === jobs.length;
+  
+  const toggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedJobIds([]);
+    } else {
+      setSelectedJobIds(jobs.map((j) => j.id));
+    }
+  };
+
+  const toggleSelectJob = (id: string) => {
+    setSelectedJobIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
   // Trigger download options popup for a single job (Start / Retry)
   const triggerSingleJobOptions = (job: MediaJob) => {
     setTargetDownloadJobs([job]);
@@ -190,6 +226,53 @@ export default function App() {
     }
     setTargetDownloadJobs(pendingJobs);
     setShowSettingsModal(true);
+  };
+
+  // Trigger download options for selected jobs subset
+  const triggerSelectedJobsOptions = () => {
+    const selectedJobs = jobs.filter((j) => selectedJobIds.includes(j.id));
+    if (selectedJobs.length === 0) return;
+    setTargetDownloadJobs(selectedJobs);
+    setShowSettingsModal(true);
+  };
+
+  // Bulk Delete (Delete from disk storage AND database)
+  const handleBulkDeleteSelected = async () => {
+    const selectedJobs = jobs.filter((j) => selectedJobIds.includes(j.id));
+    if (selectedJobs.length === 0) return;
+
+    if (
+      !confirm(
+        `Are you sure you want to PERMANENTLY DELETE ${selectedJobs.length} selected item(s)?\nThis will remove downloaded files from disk and delete records from database.`
+      )
+    ) {
+      return;
+    }
+
+    setJobs((prev) => prev.filter((j) => !selectedJobIds.includes(j.id)));
+    for (const job of selectedJobs) {
+      await deleteJobAndFile(job, dbUrl);
+    }
+    setSelectedJobIds([]);
+  };
+
+  // Bulk Reset & Remove Downloaded File (Deletes file from disk, keeps DB link, resets status to pending)
+  const handleBulkResetRemoveMedia = async () => {
+    const selectedJobs = jobs.filter((j) => selectedJobIds.includes(j.id));
+    if (selectedJobs.length === 0) return;
+
+    if (
+      !confirm(
+        `Remove downloaded media files for ${selectedJobs.length} item(s) from disk and reset status to pending?\n(Database links will be preserved).`
+      )
+    ) {
+      return;
+    }
+
+    for (const job of selectedJobs) {
+      await removeDownloadedFileAndResetJob(job, dbUrl);
+    }
+    setSelectedJobIds([]);
   };
 
   // Optimize & clean all URLs in DB queue
@@ -247,11 +330,6 @@ export default function App() {
     appendJobLog(jobId, '[SYSTEM] User requested process cancellation...');
     setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, status: 'failed', error: 'Cancelled' } : j)));
     await cancelJobDownload(jobId, dbUrl);
-  };
-
-  const handleDeleteJob = async (jobId: string) => {
-    setJobs((prev) => prev.filter((j) => j.id !== jobId));
-    await deleteJobFromQueue(jobId, dbUrl);
   };
 
   const handleDisconnect = () => {
@@ -515,13 +593,68 @@ export default function App() {
             </div>
           </Card>
 
+          {/* Gmail-Style Multi-Selection Action Bar (Appears when >= 1 items selected) */}
+          {selectedJobIds.length > 0 && (
+            <div className="p-3 bg-violet-950/80 border border-violet-500/50 rounded-lg backdrop-blur-md flex items-center justify-between shadow-[0_0_25px_rgba(139,92,246,0.2)] animate-fade-in">
+              <div className="flex items-center space-x-3 text-xs font-mono text-violet-200">
+                <div className="flex items-center space-x-2">
+                  <DarkCheckbox checked={isAllSelected} onChange={toggleSelectAll} title="Select All / Deselect All" />
+                  <span className="font-bold">{selectedJobIds.length} Selected</span>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-3 text-[11px] border-slate-800 text-slate-300 hover:text-white"
+                  onClick={triggerSelectedJobsOptions}
+                >
+                  <Play className="w-3 h-3 mr-1 text-cyber-cyan fill-current" /> Download Selected ({selectedJobIds.length})
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-3 text-[11px] border-amber-900/50 text-amber-300 hover:bg-amber-950/40"
+                  onClick={handleBulkResetRemoveMedia}
+                  title="Delete local file from storage, keep link in DB and reset status to pending"
+                >
+                  <RotateCcw className="w-3 h-3 mr-1 text-amber-400" /> Remove File (Keep DB Link)
+                </Button>
+
+                <Button
+                  variant="danger"
+                  size="sm"
+                  className="h-8 px-3 text-[11px] bg-rose-950/60 text-rose-300 border-rose-900/60 hover:bg-rose-900"
+                  onClick={handleBulkDeleteSelected}
+                  title="Permanently delete from disk storage AND delete DB record"
+                >
+                  <Trash2 className="w-3 h-3 mr-1" /> Delete (Disk + DB)
+                </Button>
+
+                <button
+                  onClick={() => setSelectedJobIds([])}
+                  className="p-1 rounded text-slate-500 hover:text-slate-200 transition-colors ml-2"
+                  title="Clear Selection"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Jobs Queue Table */}
           <Card className="p-0 bg-slate-950/40 backdrop-blur-md border-slate-900 overflow-hidden shadow-2xl">
             <div className="p-4 border-b border-slate-900 flex items-center justify-between bg-slate-900/10">
-              <div className="flex items-center space-x-2">
-                <Monitor className="w-4 h-4 text-violet-400" />
-                <span className="text-[10px] font-black uppercase tracking-wider text-slate-300">Live Media Queue</span>
+              <div className="flex items-center space-x-3">
+                <DarkCheckbox checked={isAllSelected} onChange={toggleSelectAll} title={isAllSelected ? 'Deselect All' : 'Select All'} />
+                <div className="flex items-center space-x-2">
+                  <Monitor className="w-4 h-4 text-violet-400" />
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-300">Live Media Queue</span>
+                </div>
               </div>
+
               <div className="flex items-center space-x-2">
                 <span className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 bg-violet-950/40 text-violet-400 border border-violet-900/40 rounded">
                   {pendingJobsCount} Pending
@@ -547,6 +680,9 @@ export default function App() {
                 <table className="w-full text-left text-xs text-slate-300">
                   <thead className="text-[9px] uppercase tracking-wider bg-slate-950/80 text-slate-500 border-b border-slate-900">
                     <tr>
+                      <th className="py-3.5 px-4 w-10 text-center">
+                        <DarkCheckbox checked={isAllSelected} onChange={toggleSelectAll} />
+                      </th>
                       <th className="py-3.5 px-5 font-bold">Source Title</th>
                       <th className="py-3.5 px-5 font-bold">Origin</th>
                       <th className="py-3.5 px-5 font-bold">Client Node</th>
@@ -556,6 +692,7 @@ export default function App() {
                   </thead>
                   <tbody className="divide-y divide-slate-950">
                     {jobs.map((job) => {
+                      const isSelected = selectedJobIds.includes(job.id);
                       let nodeIcon = <Laptop className="w-3.5 h-3.5" />;
                       if (job.requestedByDeviceId.includes('mobile')) {
                         nodeIcon = <Cpu className="w-3.5 h-3.5 text-pink-500" />;
@@ -564,7 +701,15 @@ export default function App() {
                       }
 
                       return (
-                        <tr key={job.id} className="hover:bg-slate-900/20 transition-all duration-200">
+                        <tr
+                          key={job.id}
+                          className={`transition-all duration-200 ${
+                            isSelected ? 'bg-violet-950/30' : 'hover:bg-slate-900/20'
+                          }`}
+                        >
+                          <td className="py-4 px-4 text-center">
+                            <DarkCheckbox checked={isSelected} onChange={() => toggleSelectJob(job.id)} />
+                          </td>
                           <td className="py-4 px-5">
                             <div className="font-bold text-slate-200 truncate max-w-xs leading-normal">{job.title || job.url}</div>
                             <div className="text-[10px] text-slate-600 font-mono truncate max-w-xs mt-0.5 select-all">{job.url}</div>
@@ -605,23 +750,14 @@ export default function App() {
                               </button>
 
                               {job.status === 'pending' && (
-                                <>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="px-2.5 py-1 text-[10px] border-slate-800 hover:border-pink-500 hover:text-pink-400"
-                                    onClick={() => triggerSingleJobOptions(job)}
-                                  >
-                                    <Play className="w-3 h-3 mr-1 fill-current" /> Start
-                                  </Button>
-                                  <button
-                                    onClick={() => handleDeleteJob(job.id)}
-                                    className="p-1.5 rounded text-slate-600 hover:text-rose-400 hover:bg-rose-950/30 transition-colors"
-                                    title="Remove from queue"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="px-2.5 py-1 text-[10px] border-slate-800 hover:border-pink-500 hover:text-pink-400"
+                                  onClick={() => triggerSingleJobOptions(job)}
+                                >
+                                  <Play className="w-3 h-3 mr-1 fill-current" /> Start
+                                </Button>
                               )}
 
                               {job.status === 'downloading' && (
@@ -642,38 +778,20 @@ export default function App() {
                               )}
 
                               {job.status === 'completed' && (
-                                <>
-                                  <span className="text-[10px] font-mono font-bold text-emerald-400 flex items-center mr-1">
-                                    <Check className="w-3 h-3 mr-1" /> Saved
-                                  </span>
-                                  <button
-                                    onClick={() => handleDeleteJob(job.id)}
-                                    className="p-1.5 rounded text-slate-600 hover:text-rose-400 hover:bg-rose-950/30 transition-colors"
-                                    title="Remove job record"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </>
+                                <span className="text-[10px] font-mono font-bold text-emerald-400 flex items-center mr-1">
+                                  <Check className="w-3 h-3 mr-1" /> Saved
+                                </span>
                               )}
 
                               {job.status === 'failed' && (
-                                <>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="px-2 py-1 text-[10px] border-amber-900/60 text-amber-400 hover:bg-amber-950/40"
-                                    onClick={() => triggerSingleJobOptions(job)}
-                                  >
-                                    <RotateCcw className="w-3 h-3 mr-1" /> Retry
-                                  </Button>
-                                  <button
-                                    onClick={() => handleDeleteJob(job.id)}
-                                    className="p-1.5 rounded text-slate-600 hover:text-rose-400 hover:bg-rose-950/30 transition-colors"
-                                    title="Remove job record"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="px-2 py-1 text-[10px] border-amber-900/60 text-amber-400 hover:bg-amber-950/40"
+                                  onClick={() => triggerSingleJobOptions(job)}
+                                >
+                                  <RotateCcw className="w-3 h-3 mr-1" /> Retry
+                                </Button>
                               )}
                             </div>
                           </td>
