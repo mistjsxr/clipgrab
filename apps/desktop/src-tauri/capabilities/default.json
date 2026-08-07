@@ -37,6 +37,36 @@
           "args": true
         }
       ]
+    },
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "sh",
+          "cmd": "sh",
+          "args": true
+        },
+        {
+          "name": "exec-sh",
+          "cmd": "sh",
+          "args": true
+        },
+        {
+          "name": "bash",
+          "cmd": "bash",
+          "args": true
+        },
+        {
+          "name": "yt-dlp",
+          "cmd": "yt-dlp",
+          "args": true
+        },
+        {
+          "name": "gallery-dl",
+          "cmd": "gallery-dl",
+          "args": true
+        }
+      ]
     }
   ]
 }

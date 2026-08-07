@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Card } from '@clipgrab/ui';
 import { open } from '@tauri-apps/plugin-dialog';
-import { DownloadConfig, checkToolAvailability } from '../downloaderEngine';
-import { Folder, Settings2, CheckCircle2, XCircle, Sliders, Film, Music, Image as ImageIcon, Play, Wrench } from 'lucide-react';
+import { DownloadConfig, checkToolAvailability, detectInstalledBrowsers } from '../downloaderEngine';
+import { Folder, Settings2, CheckCircle2, XCircle, Sliders, Film, Music, Image as ImageIcon, Play, Wrench, Cookie, ShieldAlert, Globe } from 'lucide-react';
 
 export interface DownloadSettingsModalProps {
   isOpen: boolean;
@@ -29,6 +29,7 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
     ffmpeg: false,
     gallerydl: false,
   });
+  const [installedBrowsers, setInstalledBrowsers] = useState<Array<{ id: string; name: string; installed: boolean }>>([]);
 
   useEffect(() => {
     setLocalConfig(config);
@@ -39,6 +40,7 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
       checkToolAvailability('yt-dlp').then((available) => setToolsStatus((s) => ({ ...s, ytdlp: available })));
       checkToolAvailability('ffmpeg').then((available) => setToolsStatus((s) => ({ ...s, ffmpeg: available })));
       checkToolAvailability('gallery-dl').then((available) => setToolsStatus((s) => ({ ...s, gallerydl: available })));
+      detectInstalledBrowsers().then((browsers) => setInstalledBrowsers(browsers));
     }
   }, [isOpen]);
 
@@ -69,9 +71,9 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-6 z-50 animate-fade-in">
-      <Card className="max-w-xl w-full p-6 space-y-6 relative border-cyber-purple/50 bg-slate-950 shadow-[0_0_50px_rgba(139,92,246,0.15)]">
+      <Card className="max-w-xl w-full p-6 space-y-5 relative border-cyber-purple/50 bg-slate-950 shadow-[0_0_50px_rgba(139,92,246,0.15)] max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-900 pb-4">
+        <div className="flex items-center justify-between border-b border-slate-900 pb-3">
           <div className="flex items-center space-x-2.5">
             <div className="p-2 bg-gradient-to-br from-cyber-purple to-cyber-pink text-white rounded">
               <Sliders className="w-5 h-5" />
@@ -96,7 +98,7 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
               {toolsStatus.ytdlp ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <XCircle className="w-3.5 h-3.5 text-cyber-pink" />}
               <span className="text-[10px] font-mono font-bold text-slate-300">yt-dlp</span>
             </div>
-            <div className="flex items-center space-x-1.5 bg-slate-950 p-2 rounded border border-slate-900">
+            <div className="flex items-center space-x-1.5 bg-slate-950 p-2 rounded border border-slate-950">
               {toolsStatus.ffmpeg ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <XCircle className="w-3.5 h-3.5 text-amber-400" />}
               <span className="text-[10px] font-mono font-bold text-slate-300">ffmpeg</span>
             </div>
@@ -105,6 +107,17 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
               <span className="text-[10px] font-mono font-bold text-slate-300">gallery-dl</span>
             </div>
           </div>
+        </div>
+
+        {/* User Transparency Explanation Banner */}
+        <div className="p-3.5 bg-amber-950/20 border border-amber-500/30 rounded-md text-xs space-y-1.5 text-amber-300">
+          <div className="flex items-center space-x-1.5 font-bold text-[10px] uppercase tracking-wider text-amber-400">
+            <ShieldAlert className="w-4 h-4 text-amber-400 flex-shrink-0" />
+            <span>Why Import Browser Session Cookies?</span>
+          </div>
+          <p className="text-[11px] text-amber-200/80 leading-relaxed">
+            Platforms like Instagram, X/Twitter, and YouTube block anonymous downloads for certain posts and redirect scrapers to a login page. Importing cookies from your logged-in browser bypasses login walls without needing your password.
+          </p>
         </div>
 
         {/* Form Controls */}
@@ -123,6 +136,30 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
                 <Folder className="w-3.5 h-3.5 mr-1.5 text-cyber-cyan" /> Browse
               </Button>
             </div>
+          </div>
+
+          {/* Cookie Source Selector */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center justify-between">
+              <span className="flex items-center">
+                <Cookie className="w-3.5 h-3.5 mr-1.5 text-amber-400" /> Browser Cookies Source (Bypass Login Walls)
+              </span>
+              <span className="text-[9px] text-emerald-400 font-mono font-bold">
+                {installedBrowsers.filter((b) => b.installed).length} Browsers Detected
+              </span>
+            </label>
+            <select
+              value={localConfig.cookiesBrowser || 'none'}
+              onChange={(e) => setLocalConfig({ ...localConfig, cookiesBrowser: e.target.value as any })}
+              className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-amber-400"
+            >
+              <option value="none">None (Unauthenticated / Public Only)</option>
+              {installedBrowsers.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name} {b.installed ? '✓ Installed' : '(Not detected)'}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Grid Options */}
