@@ -774,16 +774,23 @@ export async function executeJobDownload(
             }
 
             // Track destination files & streams
-            if (line.includes('[download] Destination:')) {
+            const trimmedLine = line.trim();
+
+            if ((trimmedLine.startsWith('/Users/') || trimmedLine.startsWith('/') || trimmedLine.startsWith('C:\\')) && !trimmedLine.includes('[download]') && !trimmedLine.includes('[info]')) {
+              const cleanPath = trimmedLine.replace(/^["']|["']$/g, '');
+              if (!cleanPath.endsWith('.tmp') && !cleanPath.endsWith('.part')) {
+                detectedFilePath = cleanPath;
+              }
+            } else if (line.includes('Destination:')) {
               activeStreamIndex++;
-              const candidate = line.replace('[download] Destination:', '').trim();
+              const candidate = line.replace(/.*Destination:/, '').trim().replace(/^["']|["']$/g, '');
               if (!candidate.endsWith('.tmp') && !candidate.endsWith('.part')) {
                 detectedFilePath = candidate;
               }
             } else {
-              const destMatch = line.match(/(?:Merging formats into|has already been downloaded)\s+["']?([^"'\r\n]+)/i);
+              const destMatch = line.match(/(?:Merging formats into|has already been downloaded|output is)\s+["']?([^"'\r\n]+)/i);
               if (destMatch && destMatch[1]) {
-                const candidate = destMatch[1].trim();
+                const candidate = destMatch[1].trim().replace(/^["']|["']$/g, '');
                 if (!candidate.endsWith('.tmp') && !candidate.endsWith('.part')) {
                   detectedFilePath = candidate;
                 }

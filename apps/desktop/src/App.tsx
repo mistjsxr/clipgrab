@@ -1251,7 +1251,7 @@ export default function App() {
                     <Play className="w-3 h-3 mr-1 fill-current" /> Download Selected ({selectedJobIds.length})
                   </Button>
 
-                  {/* Local Storage Actions Menu (Pops Upwards Above Bar) */}
+                  {/* Selection Deletion Actions Menu */}
                   <div className="relative">
                     <Button
                       variant="outline"
@@ -1259,7 +1259,7 @@ export default function App() {
                       className="h-8 px-3 text-[11px] border-amber-900/50 text-amber-300 hover:bg-amber-950/40 cursor-pointer"
                       onClick={() => setShowSelectionStorageMenu((prev) => !prev)}
                     >
-                      <FolderOpen className="w-3 h-3 mr-1 text-amber-400" /> Local Storage ▾
+                      <Trash2 className="w-3 h-3 mr-1 text-amber-400" /> Delete ▾
                     </Button>
 
                     {showSelectionStorageMenu && (
@@ -1273,8 +1273,8 @@ export default function App() {
                         >
                           <RotateCcw className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                           <div>
-                            <div className="font-bold">Remove Local File (Keep Link)</div>
-                            <div className="text-[9px] text-slate-400">Deletes disk file, keeps link pending in DB</div>
+                            <div className="font-bold">Delete Local Files Only</div>
+                            <div className="text-[9px] text-slate-400">Frees up Mac storage; keeps link pending in DB</div>
                           </div>
                         </button>
 
@@ -1287,8 +1287,8 @@ export default function App() {
                         >
                           <Trash2 className="w-3.5 h-3.5 text-rose-400 shrink-0" />
                           <div>
-                            <div className="font-bold">Delete File & DB Record</div>
-                            <div className="text-[9px] text-slate-400">Deletes disk file and archives DB record</div>
+                            <div className="font-bold">Delete Local Files & DB Record</div>
+                            <div className="text-[9px] text-slate-400">Deletes disk file AND archives DB queue record</div>
                           </div>
                         </button>
                       </div>
@@ -1401,8 +1401,8 @@ export default function App() {
                               </div>
                             </td>
                             <td className="py-4 px-5">
-                              {job.status === 'completed' && job.filePath ? (
-                                <span className="px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-900/60 text-[9px] font-mono font-bold flex items-center w-fit shadow-xs" title={`Saved on Mac disk: ${job.filePath}`}>
+                              {job.status === 'completed' ? (
+                                <span className="px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-900/60 text-[9px] font-mono font-bold flex items-center w-fit shadow-xs" title={`Saved on Mac disk: ${job.filePath || downloadConfig.downloadPath}`}>
                                   <FolderOpen className="w-3 h-3 mr-1 text-emerald-400 shrink-0" /> 💾 Saved on Mac
                                 </span>
                               ) : (
