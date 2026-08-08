@@ -14,6 +14,8 @@ export interface DownloadConfig {
   toolPreference: 'auto' | 'ytdlp' | 'gallerydl';
   cookiesBrowser: 'none' | 'chrome' | 'safari' | 'firefox' | 'brave' | 'edge';
   autoUpdateEngine: boolean;
+  eagleApiToken?: string;
+  eaglePort?: string;
 }
 
 export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
@@ -26,6 +28,8 @@ export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
   toolPreference: 'auto',
   cookiesBrowser: 'none',
   autoUpdateEngine: false, // Default false to prevent download startup delays
+  eagleApiToken: '',
+  eaglePort: '22745',
 };
 
 export interface EngineBinaryStatus {
@@ -699,7 +703,13 @@ export async function executeJobDownload(
       if (currentUseGalleryDl) {
         toolBinary = 'gallery-dl';
         const outputDir = expandUserPath(config.downloadPath);
-        args = ['-d', outputDir, '-o', 'path={}'];
+        args = [
+          '-d', outputDir,
+          '-o', 'directory=',
+          '-f', 'Photo by {username|author|owner|shortcode}_{num}.{extension}',
+          '-P', 'exif',
+          '-O', `exif.tags={"UserComment": "${targetUrl}", "ImageDescription": "${targetUrl}"}`
+        ];
 
         if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
           args.push('--cookies-from-browser', config.cookiesBrowser);
@@ -710,7 +720,16 @@ export async function executeJobDownload(
         toolBinary = 'yt-dlp';
         const outputTemplate = `${expandUserPath(config.downloadPath)}/%(title)s.%(ext)s`;
 
-        args = ['--progress', '--newline', '--print', 'after_move:filepath', '-o', outputTemplate];
+        args = [
+          '--progress',
+          '--newline',
+          '--print', 'after_move:filepath',
+          '--embed-metadata',
+          '--parse-metadata', 'webpage_url:%(meta_comment)s',
+          '--parse-metadata', 'webpage_url:%(meta_purl)s',
+          '--parse-metadata', 'webpage_url:%(meta_description)s',
+          '-o', outputTemplate
+        ];
 
         if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
           args.push('--cookies-from-browser', config.cookiesBrowser);
@@ -765,6 +784,8 @@ export async function executeJobDownload(
         let lastProgress = 5;
         let lastDbProgress = 5;
         let activeStreamIndex = 0;
+        let detectedFilePath: string | undefined;
+        let detectedFilePaths: string[] = [];
 
         cmd.stdout.on('data', (chunk: string) => {
           // Split stdout by carriage returns (\r) and newlines (\n)
@@ -783,12 +804,14 @@ export async function executeJobDownload(
               const cleanPath = trimmedLine.replace(/^["']|["']$/g, '');
               if (!cleanPath.endsWith('.tmp') && !cleanPath.endsWith('.part')) {
                 detectedFilePath = cleanPath;
+                if (!detectedFilePaths.includes(cleanPath)) detectedFilePaths.push(cleanPath);
               }
             } else if (line.includes('Destination:')) {
               activeStreamIndex++;
               const candidate = line.replace(/.*Destination:/, '').trim().replace(/^["']|["']$/g, '');
               if (!candidate.endsWith('.tmp') && !candidate.endsWith('.part')) {
                 detectedFilePath = candidate;
+                if (!detectedFilePaths.includes(candidate)) detectedFilePaths.push(candidate);
               }
             } else {
               const destMatch = line.match(/(?:Merging formats into|has already been downloaded|output is)\s+["']?([^"'\r\n]+)/i);
@@ -796,6 +819,7 @@ export async function executeJobDownload(
                 const candidate = destMatch[1].trim().replace(/^["']|["']$/g, '');
                 if (!candidate.endsWith('.tmp') && !candidate.endsWith('.part')) {
                   detectedFilePath = candidate;
+                  if (!detectedFilePaths.includes(candidate)) detectedFilePaths.push(candidate);
                 }
               }
             }
@@ -858,9 +882,9 @@ export async function executeJobDownload(
             }
 
             // SAFEGUARD: Only return detectedFilePath if it's a specific file, NEVER the parent directory
-            const targetFilePath = (detectedFilePath && detectedFilePath !== expandUserPath(config.downloadPath))
-              ? detectedFilePath
-              : undefined;
+            const targetFilePath = detectedFilePaths.length > 0
+              ? detectedFilePaths.join('||')
+              : (detectedFilePath && detectedFilePath !== expandUserPath(config.downloadPath) ? detectedFilePath : undefined);
 
             resolve({ success: true, filePath: targetFilePath });
           } else {
@@ -901,10 +925,44 @@ export async function executeJobDownload(
     let extractedTitle = job.title;
 
     if (finalFilePath) {
-      const filename = finalFilePath.split('/').pop() || '';
+      const firstPath = finalFilePath.split('||')[0];
+      const filename = firstPath.split('/').pop() || '';
       const cleanTitle = filename.replace(/\.[^/.]+$/, '');
       if (cleanTitle) {
         extractedTitle = cleanTitle;
+      }
+
+      // Universal FFmpeg Metadata URL Stamper (Zero re-encoding, 5ms execution)
+      const expandedPath = expandUserPath(firstPath);
+      const extIndex = expandedPath.lastIndexOf('.');
+      const ext = extIndex !== -1 ? expandedPath.substring(extIndex) : '.mp4';
+      const tempPath = expandedPath + '.meta_tmp' + ext;
+      const safeTarget = expandedPath.replace(/"/g, '\\"');
+      const safeTemp = tempPath.replace(/"/g, '\\"');
+      const safeUrl = targetUrl.replace(/"/g, '\\"');
+
+      const stampScript = `
+        ${MACOS_PATH_ENV}
+        if [ -f "${safeTarget}" ]; then
+          ffmpeg -y -i "${safeTarget}" -metadata comment="${safeUrl}" -metadata description="${safeUrl}" -metadata purl="${safeUrl}" -metadata title="${(extractedTitle || '').replace(/"/g, '\\"')}" -c copy "${safeTemp}" 2>/dev/null && mv -f "${safeTemp}" "${safeTarget}" 2>/dev/null
+        fi
+      `;
+
+      try {
+        const stampCmd = Command.create('sh', ['-c', stampScript]);
+        await stampCmd.execute();
+      } catch (e) {
+        console.warn('Failed to stamp metadata via FFmpeg:', e);
+      }
+
+      // Eagle App Automatic Local Sync
+      try {
+        const eagleRes = await sendToEagleApp(finalFilePath, targetUrl, extractedTitle || job.title, job.platform, config.eagleApiToken, config.eaglePort);
+        if (eagleRes.success && onLogOutput) {
+          onLogOutput(job.id, 'info', `[EAGLE] 🦅 Automatically imported ${eagleRes.message}`);
+        }
+      } catch (e) {
+        // Eagle App closed or not running (silent fallback)
       }
     }
 
@@ -937,4 +995,179 @@ export async function executeJobDownload(
   }
 
   return result;
+}
+
+function deriveLowercaseTag(url: string, platform?: string): string {
+  try {
+    if (!url) return (platform && platform !== 'unknown' && platform !== 'direct') ? platform.toLowerCase() : 'media';
+    const parsed = new URL(url.startsWith('http') ? url : `https://${url}`);
+    let host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+
+    if (host.includes('youtube') || host.includes('youtu.be')) return 'youtube';
+    if (host.includes('instagram')) return 'instagram';
+    if (host.includes('twitter') || host === 'x.com' || host.endsWith('.x.com')) return 'x';
+    if (host.includes('linkedin')) return 'linkedin';
+    if (host.includes('tiktok')) return 'tiktok';
+    if (host.includes('facebook') || host.includes('fb.watch')) return 'facebook';
+    if (host.includes('pinterest') || host.includes('pin.it')) return 'pinterest';
+    if (host.includes('reddit')) return 'reddit';
+
+    const parts = host.split('.');
+    if (parts.length >= 2) {
+      return parts[parts.length - 2].toLowerCase();
+    }
+    return host.toLowerCase();
+  } catch {
+    if (platform && platform !== 'unknown' && platform !== 'direct') {
+      if (platform.toLowerCase() === 'twitter') return 'x';
+      return platform.toLowerCase();
+    }
+    return 'media';
+  }
+}
+
+export async function sendToEagleApp(
+  filePath: string,
+  url: string,
+  title?: string,
+  platform?: string,
+  token?: string,
+  port?: string | number
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const activePort = port ? String(port).trim() : '22745';
+    const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
+    const endpoint = `http://127.0.0.1:${activePort}/api/item/addFromPath${tokenQuery}`;
+
+    // Collect all target file paths (split pipe-delimited or find sibling files)
+    let filesToSync: string[] = [];
+
+    if (filePath.includes('||')) {
+      filesToSync = filePath.split('||').map((p) => expandUserPath(p.trim())).filter(Boolean);
+    } else {
+      const singlePath = expandUserPath(filePath);
+      filesToSync.push(singlePath);
+
+      // Check for sibling numbered files (e.g. Photo by user_1.jpg, Photo by user_2.jpg...)
+      try {
+        const lastSlash = singlePath.lastIndexOf('/');
+        if (lastSlash !== -1) {
+          const dir = singlePath.substring(0, lastSlash);
+          const filename = singlePath.substring(lastSlash + 1);
+          const match = filename.match(/^(.*)_\d+\.([^.]+)$/);
+
+          if (match && dir) {
+            const prefix = match[1]; // e.g. "Photo by naridarbandi"
+            const safeDir = dir.replace(/"/g, '\\"');
+            const safePrefix = prefix.replace(/"/g, '\\"');
+            
+            const findCmd = Command.create('sh', [
+              '-c',
+              `ls -1 "${safeDir}/${safePrefix}"_* 2>/dev/null`
+            ]);
+            const output = await findCmd.execute();
+            if (output.code === 0 && output.stdout) {
+              const lines = output.stdout.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
+              if (lines.length > 0) {
+                filesToSync = lines;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Fall back to singlePath
+      }
+    }
+
+    if (filesToSync.length === 0) {
+      return { success: false, message: 'No valid files found to sync to Eagle.' };
+    }
+
+    let successCount = 0;
+    let lastErr = '';
+    const sourceTag = deriveLowercaseTag(url, platform);
+
+    for (let i = 0; i < filesToSync.length; i++) {
+      const targetPath = filesToSync[i];
+      const filename = targetPath.split('/').pop() || '';
+      const baseName = filename.replace(/\.[^/.]+$/, '');
+      const itemTitle = baseName;
+
+      const itemPayload = {
+        path: targetPath,
+        name: itemTitle,
+        url: url,
+        website: url,
+        annotation: url,
+        tags: [sourceTag],
+        ...(token ? { token } : {}),
+      };
+
+      const payloadJson = JSON.stringify(itemPayload);
+      let imported = false;
+
+      // 1. Try webview fetch
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: payloadJson,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === 'success') {
+            imported = true;
+          } else if (data.message) {
+            lastErr = data.message;
+          }
+        }
+      } catch (e1) {
+        // Fallback to curl
+      }
+
+      // 2. Fallback via curl shell command
+      if (!imported) {
+        try {
+          const safeEscapedJson = payloadJson.replace(/'/g, "'\\''");
+          const curlCmd = Command.create('sh', [
+            '-c',
+            `curl -s -X POST "${endpoint}" -H "Content-Type: application/json" -d '${safeEscapedJson}'`
+          ]);
+          const output = await curlCmd.execute();
+          if (output.code === 0 && output.stdout) {
+            const data = JSON.parse(output.stdout);
+            if (data.status === 'success') {
+              imported = true;
+            } else if (data.message) {
+              lastErr = data.message;
+            }
+          }
+        } catch (curlErr) {
+          console.error('Curl fallback failed:', curlErr);
+        }
+      }
+
+      if (imported) {
+        successCount++;
+      }
+    }
+
+    if (successCount > 0) {
+      return {
+        success: true,
+        message: `Successfully imported ${successCount} file(s) into Eagle App!`,
+      };
+    }
+
+    return {
+      success: false,
+      message: lastErr || `Could not connect to Eagle App on port ${activePort}.`,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `Eagle App sync error: ${err?.message || err}`,
+    };
+  }
 }

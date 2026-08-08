@@ -8,11 +8,13 @@ import { Download, QrCode, Database, RefreshCw, Copy, Check, Plus, Monitor, Shie
 import { DownloadSettingsModal } from './components/DownloadSettingsModal';
 import { CommandConsoleModal } from './components/CommandConsoleModal';
 import { BatchImportModal } from './components/BatchImportModal';
-import { DownloadConfig, DEFAULT_DOWNLOAD_CONFIG, executeJobDownload, cancelJobDownload, deleteJobAndFile, removeDownloadedFileAndResetJob, openFileInFinder, EngineBinaryStatus, getBinaryVersion, checkBinaryUpdate, updateBinaryOnDemand, archiveAndClearJobs, archiveAndClearAllWorkspace, archiveAndClearSubsetJobs, fetchMediaHistory, groupHistoryByActionBatches, restoreBatchToQueue, HistoryBatchGroup, clearMediaHistoryVault, exportHistoryToTxt } from './downloaderEngine';
+import { DownloadConfig, DEFAULT_DOWNLOAD_CONFIG, executeJobDownload, cancelJobDownload, deleteJobAndFile, removeDownloadedFileAndResetJob, openFileInFinder, EngineBinaryStatus, getBinaryVersion, checkBinaryUpdate, updateBinaryOnDemand, archiveAndClearJobs, archiveAndClearAllWorkspace, archiveAndClearSubsetJobs, fetchMediaHistory, groupHistoryByActionBatches, restoreBatchToQueue, HistoryBatchGroup, clearMediaHistoryVault, exportHistoryToTxt, sendToEagleApp } from './downloaderEngine';
 
 const LOCAL_STORAGE_DB_KEY = 'clipgrab_db_url';
 const LOCAL_STORAGE_PASS_KEY = 'clipgrab_pass_id';
 const LOCAL_STORAGE_CONFIG_KEY = 'clipgrab_download_config';
+const LOCAL_STORAGE_EAGLE_TOKEN_KEY = 'clipgrab_eagle_token';
+const LOCAL_STORAGE_EAGLE_PORT_KEY = 'clipgrab_eagle_port';
 
 // Dark Theme Cyberpunk Checkbox Component
 const DarkCheckbox: React.FC<{ checked: boolean; onChange: () => void; title?: string }> = ({ checked, onChange, title }) => (
@@ -48,6 +50,8 @@ export default function App() {
   const [showBatchImportModal, setShowBatchImportModal] = useState(false);
   const [pairingPayloadBase64, setPairingPayloadBase64] = useState('');
   const [copiedPairingKey, setCopiedPairingKey] = useState(false);
+  const [eagleToken, setEagleToken] = useState(() => localStorage.getItem(LOCAL_STORAGE_EAGLE_TOKEN_KEY) || '');
+  const [eaglePort, setEaglePort] = useState(() => localStorage.getItem(LOCAL_STORAGE_EAGLE_PORT_KEY) || '22745');
 
   // History Vault state
   const [historyRecords, setHistoryRecords] = useState<any[]>([]);
@@ -474,6 +478,83 @@ export default function App() {
     ) {
       setJobs((prev) => prev.filter((j) => j.id !== job.id));
       await deleteJobAndFile(job, dbUrl);
+    }
+  };
+
+  const handleSaveEagleToken = (val: string) => {
+    let cleanToken = val.trim();
+    let detectedPort = eaglePort;
+
+    // Auto-detect port if user pastes a URL like http://127.0.0.1:45159/ or port number
+    const portMatch = cleanToken.match(/:(\d{4,5})/);
+    if (portMatch && portMatch[1]) {
+      detectedPort = portMatch[1];
+      setEaglePort(detectedPort);
+      localStorage.setItem(LOCAL_STORAGE_EAGLE_PORT_KEY, detectedPort);
+    }
+
+    if (cleanToken.includes('token=')) {
+      const match = cleanToken.match(/token=([^&]+)/);
+      if (match && match[1]) {
+        cleanToken = match[1];
+      }
+    }
+    setEagleToken(cleanToken);
+    localStorage.setItem(LOCAL_STORAGE_EAGLE_TOKEN_KEY, cleanToken);
+    setDownloadConfig((prev) => ({ ...prev, eagleApiToken: cleanToken, eaglePort: detectedPort }));
+  };
+
+  const handleSaveEaglePort = (val: string) => {
+    const cleanPort = val.trim();
+    setEaglePort(cleanPort);
+    localStorage.setItem(LOCAL_STORAGE_EAGLE_PORT_KEY, cleanPort);
+    setDownloadConfig((prev) => ({ ...prev, eaglePort: cleanPort }));
+  };
+
+  // Single Job Manual Eagle Sync
+  const handleManualEagleSync = async (job: MediaJob) => {
+    if (!job.filePath) {
+      alert('⚠️ No local file path recorded for this download. Please re-download or check file location.');
+      return;
+    }
+    const token = eagleToken || downloadConfig.eagleApiToken;
+    const port = eaglePort || downloadConfig.eaglePort || '22745';
+    const res = await sendToEagleApp(job.filePath, job.url, job.title || undefined, job.platform, token, port);
+    if (res.success) {
+      alert('🦅 Successfully sent file and Source URL to Eagle App!');
+    } else {
+      alert(`⚠️ ${res.message}\n\nPlease ensure Eagle App is open on your Mac port ${port}.`);
+    }
+  };
+
+  // Batch Sync Completed Downloads to Eagle App
+  const handleBatchEagleSync = async () => {
+    const completedJobs = jobs.filter((j) => j.status === 'completed' && j.filePath);
+    if (completedJobs.length === 0) {
+      alert('⚠️ No completed downloads with file paths found in queue to sync.');
+      return;
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+    let lastErrorMessage = '';
+    const token = eagleToken || downloadConfig.eagleApiToken;
+    const port = eaglePort || downloadConfig.eaglePort || '22745';
+
+    for (const job of completedJobs) {
+      const res = await sendToEagleApp(job.filePath!, job.url, job.title || undefined, job.platform, token, port);
+      if (res.success) {
+        successCount++;
+      } else {
+        failCount++;
+        lastErrorMessage = res.message;
+      }
+    }
+
+    if (successCount > 0) {
+      alert(`🦅 Successfully synced ${successCount} file(s) and Source URLs to Eagle App!${failCount > 0 ? ` (${failCount} skipped/failed)` : ''}`);
+    } else {
+      alert(`⚠️ ${lastErrorMessage || `Could not connect to Eagle App on port ${port}.`}\n\nPlease check your Eagle API Token and Port in sidebar settings.`);
     }
   };
 
@@ -968,6 +1049,51 @@ export default function App() {
             </div>
           </div>
 
+          {/* Eagle App Integration Widget */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Eagle App Integration</label>
+              {eagleToken ? (
+                <span className="text-[9px] font-mono text-emerald-400 font-bold">🦅 Token Saved</span>
+              ) : (
+                <span className="text-[9px] font-mono text-amber-400 font-bold">Token Required</span>
+              )}
+            </div>
+            <div className="p-3 bg-slate-950/80 border border-slate-900 rounded-md space-y-2.5">
+              <div>
+                <div className="text-[10px] text-slate-400 font-medium mb-1">Eagle API Token</div>
+                <input
+                  type="password"
+                  value={eagleToken}
+                  onChange={(e) => handleSaveEagleToken(e.target.value)}
+                  placeholder="Paste Eagle API Token..."
+                  className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-violet-500"
+                />
+              </div>
+
+              <div>
+                <div className="text-[10px] text-slate-400 font-medium mb-1">Eagle Port (Default: 22745)</div>
+                <input
+                  type="text"
+                  value={eaglePort}
+                  onChange={(e) => handleSaveEaglePort(e.target.value)}
+                  placeholder="22745"
+                  className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-violet-500"
+                />
+              </div>
+
+              {eagleToken ? (
+                <p className="text-[9px] text-slate-500 leading-normal">
+                  🦅 Eagle Sync active on port {eaglePort || '22745'}. Downloads auto-sync to Eagle App with web URLs.
+                </p>
+              ) : (
+                <p className="text-[9px] text-slate-600 leading-normal">
+                  Copy API Token from Eagle Preferences &gt; Developer to enable automatic library sync.
+                </p>
+              )}
+            </div>
+          </div>
+
           {/* Pairing Controls */}
           <div className="space-y-2.5">
             <label className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Device Link</label>
@@ -1032,6 +1158,17 @@ export default function App() {
               
               {/* Top Right Controls */}
               <div className="flex items-center space-x-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 px-3 text-xs border-violet-500/40 text-violet-300 hover:bg-violet-950/30 cursor-pointer"
+                  onClick={handleBatchEagleSync}
+                  disabled={completedJobsCount === 0}
+                  title="Batch-sync all completed downloads & Source URLs to open Eagle App"
+                >
+                  🦅 Sync Eagle
+                </Button>
+
                 <Button
                   variant="outline"
                   size="sm"
@@ -1476,6 +1613,16 @@ export default function App() {
                                       title="Open File Location in macOS Finder"
                                     >
                                       <FolderOpen className="w-3 h-3 mr-1" /> Finder
+                                    </Button>
+
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="px-2 py-1 text-[10px] border-violet-900/60 hover:border-violet-400 text-violet-300 hover:bg-violet-950/40 cursor-pointer"
+                                      onClick={() => handleManualEagleSync(job)}
+                                      title="Send file and exact Source URL to Eagle App"
+                                    >
+                                      🦅 Eagle
                                     </Button>
 
                                     <button
