@@ -75,7 +75,7 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-6 z-50 animate-fade-in">
+    <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-6 z-50 animate-fade-in">
       <Card className="max-w-xl w-full p-6 space-y-5 relative border-cyber-purple/50 bg-slate-950 shadow-[0_0_50px_rgba(139,92,246,0.15)] max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-900 pb-3">

@@ -49,7 +49,7 @@ export const CommandConsoleModal: React.FC<CommandConsoleModalProps> = ({
   }
 
   return (
-    <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-6 z-50 animate-fade-in">
+    <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-6 z-50 animate-fade-in">
       <Card className="max-w-3xl w-full h-[560px] p-0 flex flex-col border-violet-500/40 bg-slate-950 shadow-[0_0_60px_rgba(139,92,246,0.2)] overflow-hidden">
         {/* Terminal Titlebar Header */}
         <div className="p-3.5 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between shrink-0 select-none">

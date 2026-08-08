@@ -63,7 +63,7 @@ export const BatchImportModal: React.FC<BatchImportModalProps> = ({ isOpen, onCl
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-6 z-50 animate-fade-in">
+    <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-6 z-50 animate-fade-in">
       <Card className="max-w-xl w-full p-6 space-y-5 relative border-cyber-purple/50 bg-slate-950 shadow-[0_0_50px_rgba(139,92,246,0.15)]">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-900 pb-3">

@@ -1237,7 +1237,7 @@ export default function App() {
 
       {/* QR Code & Pairing Modal */}
       {showPairingModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-6 z-50 animate-fade-in">
+        <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xs flex items-center justify-center p-6 z-50 animate-fade-in">
           <Card className="max-w-md w-full p-6 space-y-6 relative border-violet-500/55 bg-slate-950 shadow-[0_0_50px_rgba(139,92,246,0.15)]">
             <div className="flex items-center justify-between border-b border-slate-900 pb-3">
               <h2 className="text-sm font-black uppercase tracking-wider text-slate-200 flex items-center">
