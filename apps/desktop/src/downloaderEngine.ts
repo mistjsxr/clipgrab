@@ -268,6 +268,9 @@ export function isPhotoUrl(url: string, platform: string): boolean {
   if (platform === 'twitter' && url.includes('/photo/')) {
     return true;
   }
+  if (platform === 'instagram' && (url.includes('/p/') || url.includes('/photos/') || url.includes('carousel'))) {
+    return true;
+  }
   return false;
 }
 
