@@ -467,7 +467,11 @@ export default function App() {
 
   // Single Job Deletion (Disk + DB)
   const handleSingleDelete = async (job: MediaJob) => {
-    if (confirm(`Permanently delete "${job.title || job.url}"?\nThis deletes the downloaded file from disk and record from DB.`)) {
+    if (
+      confirm(
+        `💥 PERMANENTLY DELETE "${job.title || job.url}"?\n\nWhat will happen:\n• 💾 Local File on Mac: Downloaded video/audio file will be DELETED from disk.\n• 📄 Queue Link: Database record will be archived into History Vault & removed from queue.`
+      )
+    ) {
       setJobs((prev) => prev.filter((j) => j.id !== job.id));
       await deleteJobAndFile(job, dbUrl);
     }
@@ -475,7 +479,11 @@ export default function App() {
 
   // Single Job Remove File (Keep DB Link)
   const handleSingleRemoveFile = async (job: MediaJob) => {
-    if (confirm(`Remove local file for "${job.title || job.url}" from disk and reset status to pending?\n(DB link preserved).`)) {
+    if (
+      confirm(
+        `🗑️ DELETE LOCAL FILE ONLY (KEEP LINK)?\n\nWhat will happen:\n• 💾 Local File on Mac: Physical file for "${job.title || job.url}" will be DELETED from disk to free space.\n• 📄 Queue Link: Link remains in queue & reset to PENDING for re-download anytime.`
+      )
+    ) {
       await removeDownloadedFileAndResetJob(job, dbUrl);
     }
   };
@@ -487,7 +495,7 @@ export default function App() {
 
     if (
       !confirm(
-        `Are you sure you want to PERMANENTLY DELETE ${selectedJobs.length} selected item(s)?\nThis will remove downloaded files from disk and delete records from database.`
+        `💥 PERMANENTLY DELETE ${selectedJobs.length} SELECTED ITEM(S)?\n\nWhat will happen:\n• 💾 Local Files on Mac: Physical video/audio files will be DELETED from disk.\n• 📄 Queue Links: Database records will be archived into History Vault & removed from Live Workspace.`
       )
     ) {
       return;
@@ -507,7 +515,7 @@ export default function App() {
 
     if (
       !confirm(
-        `Remove downloaded media files for ${selectedJobs.length} item(s) from disk and reset status to pending?\n(Database links will be preserved).`
+        `🗑️ DELETE LOCAL DISK FILES ONLY (KEEP DB LINKS)?\n\nWhat will happen:\n• 💾 Local Files on Mac: Downloaded media files for ${selectedJobs.length} item(s) will be DELETED from disk to free storage space.\n• 📄 Queue Links: Links remain in Live Workspace & reset to PENDING for re-download anytime.`
       )
     ) {
       return;
@@ -526,7 +534,7 @@ export default function App() {
 
     if (
       confirm(
-        `Archive ${selectedJobs.length} selected link(s) to History Vault and clear them from workspace?\n\n✔ Links will be safely backed up into your History Vault with timestamps.\n✔ Downloaded local files on disk will NOT be deleted.`
+        `📦 ARCHIVE ${selectedJobs.length} LINK(S) TO HISTORY VAULT?\n\nWhat will happen:\n• 📄 Queue Links: ${selectedJobs.length} link(s) moved to History Vault.\n• 💾 Local Files on Mac: 0 files deleted (Downloaded videos remain 100% safe on disk).`
       )
     ) {
       setJobs((prev) => prev.filter((j) => !selectedJobIds.includes(j.id)));
@@ -543,7 +551,7 @@ export default function App() {
 
     if (
       confirm(
-        `Clear ${completedJobs.length} completed download link(s) from Live Workspace?\n\n✔ All links will be safely backed up into your History Vault with timestamps.\n✔ Downloaded local files on disk will NOT be deleted.`
+        `🧹 CLEAR COMPLETED TASKS FROM WORKSPACE?\n\nWhat will happen:\n• 📄 Queue Links: ${completedJobs.length} completed link(s) archived into History Vault.\n• 💾 Local Files on Mac: 0 files deleted (Downloaded videos remain 100% safe on disk).`
       )
     ) {
       setJobs((prev) => prev.filter((j) => j.status !== 'completed'));
@@ -558,7 +566,7 @@ export default function App() {
 
     if (
       confirm(
-        `CLEAR ALL ${jobs.length} task links from Live Workspace to start a fresh batch?\n\n✔ Every single link will be safely backed up in your History Vault with timestamps.\n✔ Local media files on disk will NOT be deleted.`
+        `⚡ CLEAR ENTIRE LIVE WORKSPACE?\n\nWhat will happen:\n• 📄 Queue Links: All ${jobs.length} link(s) archived into History Vault.\n• 💾 Local Files on Mac: 0 files deleted (Downloaded videos remain 100% safe on disk).`
       )
     ) {
       const jobsToClear = [...jobs];
@@ -1225,7 +1233,7 @@ export default function App() {
 
             {/* Contextual Multi-Selection Action Bar */}
             {selectedJobIds.length > 0 && (
-              <div className="p-3 bg-violet-950/80 border border-violet-500/50 rounded-lg backdrop-blur-md flex items-center justify-between shadow-[0_0_25px_rgba(139,92,246,0.25)] animate-fade-in">
+              <div className="relative z-40 p-3 bg-violet-950/80 border border-violet-500/50 rounded-lg backdrop-blur-md flex items-center justify-between shadow-[0_0_25px_rgba(139,92,246,0.25)] animate-fade-in">
                 <div className="flex items-center space-x-3 text-xs font-mono text-violet-200">
                   <div className="flex items-center space-x-2">
                     <DarkCheckbox checked={isAllSelected} onChange={toggleSelectAll} title="Select All / Deselect All" />
@@ -1243,7 +1251,7 @@ export default function App() {
                     <Play className="w-3 h-3 mr-1 fill-current" /> Download Selected ({selectedJobIds.length})
                   </Button>
 
-                  {/* Local Storage Actions Menu */}
+                  {/* Local Storage Actions Menu (Pops Upwards Above Bar) */}
                   <div className="relative">
                     <Button
                       variant="outline"
@@ -1255,7 +1263,7 @@ export default function App() {
                     </Button>
 
                     {showSelectionStorageMenu && (
-                      <div className="absolute right-0 mt-1.5 w-64 bg-slate-900 border border-slate-800 rounded-lg shadow-2xl p-1.5 z-50 space-y-1 animate-fade-in">
+                      <div className="absolute right-0 bottom-full mb-2 w-64 bg-slate-900 border border-slate-700 rounded-lg shadow-[0_10px_30px_rgba(0,0,0,0.8)] p-1.5 z-50 space-y-1 animate-fade-in">
                         <button
                           onClick={() => {
                             setShowSelectionStorageMenu(false);
@@ -1350,6 +1358,7 @@ export default function App() {
                         <th className="py-3.5 px-5 font-bold">Source Title</th>
                         <th className="py-3.5 px-5 font-bold">Origin</th>
                         <th className="py-3.5 px-5 font-bold">Client Node</th>
+                        <th className="py-3.5 px-5 font-bold">Disk Status</th>
                         <th className="py-3.5 px-5 font-bold">State & Progress</th>
                         <th className="py-3.5 px-5 font-bold text-right">Actions</th>
                       </tr>
@@ -1390,6 +1399,17 @@ export default function App() {
                                 {nodeIcon}
                                 <span className="font-mono text-[10px] font-semibold">{job.requestedByDeviceId}</span>
                               </div>
+                            </td>
+                            <td className="py-4 px-5">
+                              {job.status === 'completed' && job.filePath ? (
+                                <span className="px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-900/60 text-[9px] font-mono font-bold flex items-center w-fit shadow-xs" title={`Saved on Mac disk: ${job.filePath}`}>
+                                  <FolderOpen className="w-3 h-3 mr-1 text-emerald-400 shrink-0" /> 💾 Saved on Mac
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded bg-slate-900/80 text-amber-400/90 border border-slate-800 text-[9px] font-mono font-bold flex items-center w-fit">
+                                  <Link2 className="w-3 h-3 mr-1 text-amber-400 shrink-0" /> 🔗 Link Only
+                                </span>
+                              )}
                             </td>
                             <td className="py-4 px-5">
                               <div className="space-y-1.5">
