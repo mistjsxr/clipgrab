@@ -25,8 +25,19 @@ export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
   useGalleryDlForPhotos: true,
   toolPreference: 'auto',
   cookiesBrowser: 'none',
-  autoUpdateEngine: true,
+  autoUpdateEngine: false, // Default false to prevent download startup delays
 };
+
+export interface EngineBinaryStatus {
+  name: string;
+  binary: 'yt-dlp' | 'gallery-dl' | 'ffmpeg';
+  installed: boolean;
+  version: string;
+  updateAvailable: boolean;
+  latestVersion?: string;
+  checking: boolean;
+  updating: boolean;
+}
 
 // Map of active child processes running by jobId
 const activeChildProcesses = new Map<string, any>();
@@ -133,25 +144,86 @@ export async function openFileInFinder(job: MediaJob, dbUrl?: string, configPath
   }
 }
 
-export async function updateEngineBinaries(
-  jobId: string,
-  onLogOutput?: (jobId: string, type: 'stdout' | 'stderr' | 'info', text: string) => void
-): Promise<boolean> {
-  if (onLogOutput) {
-    onLogOutput(jobId, 'info', '$ yt-dlp -U (Performing pre-flight engine update check...)');
-  }
+// Engine Binary Version & Health Inspection Functions
+export async function getBinaryVersion(binary: 'yt-dlp' | 'gallery-dl' | 'ffmpeg'): Promise<{ installed: boolean; version: string }> {
   try {
-    const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} yt-dlp -U`]);
+    let flag = '--version';
+    if (binary === 'ffmpeg') flag = '-version';
+    const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} ${binary} ${flag}`]);
     const output = await cmd.execute();
-    if (onLogOutput && output.stdout) {
-      onLogOutput(jobId, 'stdout', output.stdout.trim());
+
+    if (output.code === 0 && output.stdout.trim()) {
+      let ver = output.stdout.split('\n')[0].trim();
+      if (binary === 'ffmpeg') {
+        const match = ver.match(/ffmpeg version ([^\s]+)/i);
+        if (match) ver = match[1];
+      }
+      return { installed: true, version: ver };
     }
-    return true;
+    return { installed: false, version: 'Not Installed' };
+  } catch {
+    return { installed: false, version: 'Not Installed' };
+  }
+}
+
+export async function checkBinaryUpdate(binary: 'yt-dlp' | 'gallery-dl' | 'ffmpeg'): Promise<{ updateAvailable: boolean; latestVersion?: string }> {
+  try {
+    if (binary === 'yt-dlp') {
+      const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} yt-dlp -U`]);
+      const output = await cmd.execute();
+      const text = (output.stdout + output.stderr).toLowerCase();
+      if (text.includes('updating') || text.includes('available') || text.includes('update')) {
+        const latestMatch = output.stdout.match(/latest version is ([^\s]+)/i);
+        return { updateAvailable: true, latestVersion: latestMatch ? latestMatch[1] : 'New Version' };
+      }
+      return { updateAvailable: false };
+    } else if (binary === 'gallery-dl') {
+      const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} gallery-dl -U`]);
+      const output = await cmd.execute();
+      const text = (output.stdout + output.stderr).toLowerCase();
+      if (text.includes('updating') || text.includes('available')) {
+        return { updateAvailable: true };
+      }
+      return { updateAvailable: false };
+    } else {
+      // ffmpeg brew check
+      const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} brew outdated ffmpeg`]);
+      const output = await cmd.execute();
+      if (output.stdout.trim().includes('ffmpeg')) {
+        return { updateAvailable: true };
+      }
+      return { updateAvailable: false };
+    }
+  } catch {
+    return { updateAvailable: false };
+  }
+}
+
+export async function updateBinaryOnDemand(binary: 'yt-dlp' | 'gallery-dl' | 'ffmpeg'): Promise<{ success: boolean; message: string; newVersion?: string }> {
+  try {
+    let script = `${MACOS_PATH_ENV} ${binary} -U`;
+    if (binary === 'ffmpeg') {
+      script = `${MACOS_PATH_ENV} brew upgrade ffmpeg`;
+    }
+
+    const cmd = Command.create('sh', ['-c', script]);
+    const output = await cmd.execute();
+
+    if (output.code === 0) {
+      const updated = await getBinaryVersion(binary);
+      return { success: true, message: `Successfully updated ${binary}!`, newVersion: updated.version };
+    } else {
+      // Fallback try brew upgrade
+      const brewCmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} brew upgrade ${binary}`]);
+      const brewOut = await brewCmd.execute();
+      if (brewOut.code === 0) {
+        const updated = await getBinaryVersion(binary);
+        return { success: true, message: `Successfully updated ${binary} via Homebrew!`, newVersion: updated.version };
+      }
+      return { success: false, message: output.stderr.trim() || brewOut.stderr.trim() || 'Update failed' };
+    }
   } catch (err: any) {
-    if (onLogOutput) {
-      onLogOutput(jobId, 'stderr', `[NOTICE] Engine update check skipped: ${err?.message || err}`);
-    }
-    return false;
+    return { success: false, message: err?.message || 'Update failed' };
   }
 }
 
@@ -307,11 +379,6 @@ export async function executeJobDownload(
     console.error('Failed to set downloading status in DB:', err);
   }
 
-  // Optional Pre-flight Engine Update
-  if (config.autoUpdateEngine !== false) {
-    await updateEngineBinaries(job.id, onLogOutput);
-  }
-
   // Tool Selection & Fallback Logic
   let useGalleryDl = false;
   if (config.toolPreference === 'gallerydl') {
@@ -397,27 +464,21 @@ export async function executeJobDownload(
             args.push('--audio-quality', config.audioQuality);
           }
         } else {
-          // STRICT FFmpeg Container Recoding & Apple-Compatible Codec Transcoding
+          // ULTRA-FAST SUB-SECOND REMUXING & APPLE HARDWARE ACCELERATED ENCODING
           const targetContainer = config.container || 'mp4';
-          args.push('--recode-video', targetContainer);
 
-          let ffmpegVideoCodec = 'libx264';
-          let extraAppleFlags = '';
-
-          if (config.videoCodec === 'h265') {
-            ffmpegVideoCodec = 'libx265';
-            // Apple macOS QuickTime requires FourCC tag hvc1 for H.265 / HEVC MP4 files
-            extraAppleFlags = '-tag:v hvc1 ';
-          } else if (config.videoCodec === 'av1') {
-            ffmpegVideoCodec = 'libsvtav1';
-          } else if (config.videoCodec === 'vp9') {
-            ffmpegVideoCodec = 'libvpx-vp9';
+          if (config.videoCodec === 'auto' || config.videoCodec === 'h264') {
+            // Direct Fast Stream Remuxing (Zero CPU re-encoding, sub-second finish!)
+            args.push('--remux-video', targetContainer);
+            args.push('-S', 'vcodec:h264,vcodec:avc,res,acodec:m4a,acodec:aac');
+          } else if (config.videoCodec === 'h265') {
+            // Apple VideoToolbox Hardware Accelerated HEVC (20x faster GPU hardware encoding!)
+            args.push('--recode-video', targetContainer);
+            args.push('--postprocessor-args', 'ffmpeg: -c:v hevc_videotoolbox -tag:v hvc1 -c:a aac');
           } else {
-            ffmpegVideoCodec = 'libx264';
+            args.push('--recode-video', targetContainer);
+            args.push('--postprocessor-args', `ffmpeg: -c:v ${config.videoCodec === 'av1' ? 'libsvtav1' : 'libvpx-vp9'} -preset fast -c:a aac`);
           }
-
-          // Force FFmpeg to strictly render the video with Apple QuickTime compatible flags (-tag:v hvc1 for HEVC)
-          args.push('--postprocessor-args', `ffmpeg: ${extraAppleFlags}-c:v ${ffmpegVideoCodec} -preset fast -c:a aac`);
         }
 
         args.push(targetUrl);

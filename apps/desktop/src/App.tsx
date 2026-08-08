@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Button, Card, Input, QRCodeView, StatusBadge } from '@clipgrab/ui';
 import { createNeonClient, verifyNeonConnection, initializeDatabaseTables, mediaQueue, eq } from '@clipgrab/db';
 import { isValidMediaUrl, createMediaJobPayload, cleanMediaUrl } from '@clipgrab/core-downloader';
@@ -8,7 +8,7 @@ import { Download, QrCode, Database, RefreshCw, Copy, Check, Plus, Monitor, Shie
 import { DownloadSettingsModal } from './components/DownloadSettingsModal';
 import { CommandConsoleModal } from './components/CommandConsoleModal';
 import { BatchImportModal } from './components/BatchImportModal';
-import { DownloadConfig, DEFAULT_DOWNLOAD_CONFIG, executeJobDownload, cancelJobDownload, deleteJobAndFile, removeDownloadedFileAndResetJob, openFileInFinder } from './downloaderEngine';
+import { DownloadConfig, DEFAULT_DOWNLOAD_CONFIG, executeJobDownload, cancelJobDownload, deleteJobAndFile, removeDownloadedFileAndResetJob, openFileInFinder, EngineBinaryStatus, getBinaryVersion, checkBinaryUpdate, updateBinaryOnDemand } from './downloaderEngine';
 
 const LOCAL_STORAGE_DB_KEY = 'clipgrab_db_url';
 const LOCAL_STORAGE_PASS_KEY = 'clipgrab_pass_id';
@@ -58,13 +58,107 @@ export default function App() {
   // Gmail-style Selection state
   const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
 
+  // Engine Binary Status State
+  const [engineStatuses, setEngineStatuses] = useState<EngineBinaryStatus[]>([
+    { name: 'yt-dlp', binary: 'yt-dlp', installed: false, version: 'Checking...', updateAvailable: false, checking: true, updating: false },
+    { name: 'FFmpeg', binary: 'ffmpeg', installed: false, version: 'Checking...', updateAvailable: false, checking: true, updating: false },
+    { name: 'gallery-dl', binary: 'gallery-dl', installed: false, version: 'Checking...', updateAvailable: false, checking: true, updating: false },
+  ]);
+
   // Download Engine & Terminal Console state
   const [downloadConfig, setDownloadConfig] = useState<DownloadConfig>(DEFAULT_DOWNLOAD_CONFIG);
   const [targetDownloadJobs, setTargetDownloadJobs] = useState<MediaJob[]>([]);
   const [isDownloadingBatch, setIsDownloadingBatch] = useState(false);
   const [jobLogs, setJobLogs] = useState<Record<string, string[]>>({});
   const [activeConsoleJob, setActiveConsoleJob] = useState<MediaJob | null>(null);
-  const [userClosedConsole, setUserClosedConsole] = useState(false);
+
+  // Mutable refs to prevent stale closure bugs in async download loops
+  const userClosedConsoleRef = useRef(false);
+  const isBatchCancelledRef = useRef(false);
+
+  // Non-blocking Startup Engine Health & Version Inspection
+  useEffect(() => {
+    const inspectEngines = async () => {
+      for (const b of ['yt-dlp', 'ffmpeg', 'gallery-dl'] as const) {
+        const ver = await getBinaryVersion(b);
+        setEngineStatuses((prev) =>
+          prev.map((item) =>
+            item.binary === b
+              ? { ...item, installed: ver.installed, version: ver.version, checking: true }
+              : item
+          )
+        );
+
+        if (ver.installed) {
+          const updateInfo = await checkBinaryUpdate(b);
+          setEngineStatuses((prev) =>
+            prev.map((item) =>
+              item.binary === b
+                ? {
+                    ...item,
+                    updateAvailable: updateInfo.updateAvailable,
+                    latestVersion: updateInfo.latestVersion,
+                    checking: false,
+                  }
+                : item
+            )
+          );
+        } else {
+          setEngineStatuses((prev) =>
+            prev.map((item) => (item.binary === b ? { ...item, checking: false } : item))
+          );
+        }
+      }
+    };
+
+    inspectEngines();
+  }, []);
+
+  const handleRefreshEngineHealth = async () => {
+    setEngineStatuses((prev) => prev.map((s) => ({ ...s, checking: true })));
+    for (const b of ['yt-dlp', 'ffmpeg', 'gallery-dl'] as const) {
+      const ver = await getBinaryVersion(b);
+      const updateInfo = ver.installed ? await checkBinaryUpdate(b) : { updateAvailable: false };
+      setEngineStatuses((prev) =>
+        prev.map((item) =>
+          item.binary === b
+            ? {
+                ...item,
+                installed: ver.installed,
+                version: ver.version,
+                updateAvailable: updateInfo.updateAvailable,
+                latestVersion: updateInfo.latestVersion,
+                checking: false,
+              }
+            : item
+        )
+      );
+    }
+  };
+
+  const handleUpdateEngineBinary = async (binary: 'yt-dlp' | 'gallery-dl' | 'ffmpeg') => {
+    setEngineStatuses((prev) =>
+      prev.map((item) => (item.binary === binary ? { ...item, updating: true } : item))
+    );
+
+    const res = await updateBinaryOnDemand(binary);
+    alert(res.message);
+
+    const updatedVer = await getBinaryVersion(binary);
+    setEngineStatuses((prev) =>
+      prev.map((item) =>
+        item.binary === binary
+          ? {
+              ...item,
+              updating: false,
+              installed: updatedVer.installed,
+              version: updatedVer.version,
+              updateAvailable: false,
+            }
+          : item
+      )
+    );
+  };
 
   // Load existing credentials & download config on startup
   useEffect(() => {
@@ -380,15 +474,20 @@ export default function App() {
     if (targetDownloadJobs.length === 0) return;
 
     setIsDownloadingBatch(true);
-    setUserClosedConsole(false);
+    userClosedConsoleRef.current = false;
+    isBatchCancelledRef.current = false;
     let successCount = 0;
     let failCount = 0;
 
     for (let i = 0; i < targetDownloadJobs.length; i++) {
+      if (isBatchCancelledRef.current) {
+        break;
+      }
+
       const job = targetDownloadJobs[i];
       
-      // Only switch active terminal window if user hasn't explicitly closed it
-      if (!userClosedConsole) {
+      // Only switch active console job if user hasn't explicitly closed it!
+      if (!userClosedConsoleRef.current) {
         setActiveConsoleJob(job);
       }
 
@@ -406,6 +505,10 @@ export default function App() {
         }
       );
 
+      if (isBatchCancelledRef.current) {
+        break;
+      }
+
       if (res.success) {
         successCount++;
         appendJobLog(job.id, `✔ Completed download ${i + 1}/${targetDownloadJobs.length}`);
@@ -419,7 +522,9 @@ export default function App() {
     const lastJob = targetDownloadJobs[targetDownloadJobs.length - 1];
     if (lastJob) {
       appendJobLog(lastJob.id, '================================================');
-      if (failCount === 0) {
+      if (isBatchCancelledRef.current) {
+        appendJobLog(lastJob.id, '🛑 BATCH TERMINATED BY USER (Partial downloads preserved).');
+      } else if (failCount === 0) {
         appendJobLog(lastJob.id, `✔ BATCH COMPLETE: All ${successCount} media files downloaded successfully!`);
       } else {
         appendJobLog(lastJob.id, `⚠️ BATCH COMPLETED WITH NOTICES: ${successCount} Succeeded, ${failCount} Failed.`);
@@ -430,10 +535,26 @@ export default function App() {
     setIsDownloadingBatch(false);
   };
 
+  // Single job cancel/stop
   const handleCancelJob = async (jobId: string) => {
     appendJobLog(jobId, '[SYSTEM] User requested process termination (stopping active download & preserving content)...');
     setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, status: 'failed', error: 'Stopped by user' } : j)));
     await cancelJobDownload(jobId, dbUrl);
+  };
+
+  // Top bar stop ALL downloads handler
+  const handleStopAllDownloads = async () => {
+    isBatchCancelledRef.current = true;
+    
+    // Find currently downloading job and kill its process
+    const activeJob = jobs.find((j) => j.status === 'downloading');
+    if (activeJob) {
+      appendJobLog(activeJob.id, '[SYSTEM] User requested batch termination (stopping active task & preserving content)...');
+      setJobs((prev) => prev.map((j) => (j.id === activeJob.id ? { ...j, status: 'failed', error: 'Stopped by user' } : j)));
+      await cancelJobDownload(activeJob.id, dbUrl);
+    }
+
+    setIsDownloadingBatch(false);
   };
 
   const handleDisconnect = () => {
@@ -521,8 +642,8 @@ export default function App() {
       <div className="absolute bottom-[10%] right-[10%] w-[500px] h-[500px] rounded-full bg-pink-900/5 blur-[120px] pointer-events-none" />
 
       {/* Left Sidebar */}
-      <aside className="w-80 bg-slate-950/60 backdrop-blur-md border-r border-slate-900 p-6 flex flex-col justify-between z-10 shrink-0">
-        <div className="space-y-8">
+      <aside className="w-80 bg-slate-950/60 backdrop-blur-md border-r border-slate-900 p-6 flex flex-col justify-between z-10 shrink-0 overflow-y-auto">
+        <div className="space-y-6">
           {/* Logo / Branding */}
           <div className="flex items-center space-x-3">
             <div className="p-2 bg-gradient-to-br from-violet-600 to-pink-500 text-white rounded shadow-[0_0_15px_rgba(255,0,127,0.3)]">
@@ -541,8 +662,60 @@ export default function App() {
 
           <div className="border-t border-slate-900" />
 
+          {/* Engine Binary Health & On-Demand Updater Widget */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Core Engines & Tools</label>
+              <button
+                onClick={handleRefreshEngineHealth}
+                className="text-[10px] text-violet-400 hover:text-pink-400 font-bold uppercase flex items-center transition-colors"
+                title="Re-check binary versions"
+              >
+                <RefreshCw className="w-3 h-3 mr-1" /> Refresh
+              </button>
+            </div>
+            <div className="p-3 bg-slate-950/80 border border-slate-900 rounded-md space-y-3 text-xs">
+              {engineStatuses.map((engine) => (
+                <div key={engine.binary} className="flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center space-x-1.5 font-bold text-slate-200 text-xs">
+                      <span>{engine.name}</span>
+                      <span className="text-[9px] font-mono text-slate-500 font-normal">v{engine.version}</span>
+                    </div>
+                    <div className="mt-0.5">
+                      {engine.checking ? (
+                        <span className="text-[9px] font-mono text-cyan-400 animate-pulse">Checking...</span>
+                      ) : engine.updateAvailable ? (
+                        <span className="text-[9px] font-mono font-bold text-amber-400 bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-900/60">
+                          Update Available
+                        </span>
+                      ) : engine.installed ? (
+                        <span className="text-[9px] font-mono font-bold text-emerald-400">Up to date</span>
+                      ) : (
+                        <span className="text-[9px] font-mono text-rose-500">Not Installed</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {engine.updateAvailable && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-6 px-2 text-[10px] border-amber-500/40 text-amber-300 hover:bg-amber-950/50"
+                      disabled={engine.updating}
+                      onClick={() => handleUpdateEngineBinary(engine.binary)}
+                    >
+                      {engine.updating ? <RefreshCw className="w-3 h-3 animate-spin mr-1" /> : <Sparkles className="w-3 h-3 mr-1" />}
+                      {engine.updating ? 'Updating...' : 'Update'}
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
           {/* Database Info Widget */}
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             <label className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Database Connection</label>
             <div className="p-3 bg-slate-950/80 border border-slate-900 rounded-md space-y-2">
               <div className="flex items-center justify-between text-xs">
@@ -560,7 +733,7 @@ export default function App() {
           </div>
 
           {/* Download Config Quick View */}
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             <div className="flex items-center justify-between">
               <label className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Engine Defaults</label>
               <button
@@ -594,7 +767,7 @@ export default function App() {
           </div>
 
           {/* Pairing Controls */}
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             <label className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Device Link</label>
             <Button
               variant="outline"
@@ -608,7 +781,7 @@ export default function App() {
         </div>
 
         {/* Disconnect / Actions */}
-        <div className="space-y-4">
+        <div className="space-y-4 pt-4">
           <Button
             variant="danger"
             size="sm"
@@ -690,22 +863,35 @@ export default function App() {
               </Button>
 
               {isDownloadingBatch ? (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-violet-600 hover:to-cyan-600 shadow-[0_0_15px_rgba(6,182,212,0.3)] animate-pulse cursor-pointer"
-                  onClick={() => {
-                    setUserClosedConsole(false);
-                    const activeJob = jobs.find((j) => j.status === 'downloading') || targetDownloadJobs[0];
-                    if (activeJob) {
-                      setActiveConsoleJob(activeJob);
-                    }
-                  }}
-                  title="Click to view live CLI Terminal Console"
-                >
-                  <RefreshCw className="w-4 h-4 animate-spin mr-1.5" />
-                  Downloading... (View CLI)
-                </Button>
+                <div className="flex items-center space-x-2">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-violet-600 hover:to-cyan-600 shadow-[0_0_15px_rgba(6,182,212,0.3)] animate-pulse cursor-pointer"
+                    onClick={() => {
+                      userClosedConsoleRef.current = false;
+                      const activeJob = jobs.find((j) => j.status === 'downloading') || targetDownloadJobs[0];
+                      if (activeJob) {
+                        setActiveConsoleJob(activeJob);
+                      }
+                    }}
+                    title="Click to view live CLI Terminal Console"
+                  >
+                    <RefreshCw className="w-4 h-4 animate-spin mr-1.5" />
+                    Downloading... (View CLI)
+                  </Button>
+
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    className="h-9 px-3 text-xs font-bold uppercase tracking-wider bg-rose-950/80 text-rose-300 border-rose-800 hover:bg-rose-900 shadow-[0_0_15px_rgba(225,29,72,0.3)]"
+                    onClick={handleStopAllDownloads}
+                    title="Stop & Terminate All Active Downloads (Preserve Content)"
+                  >
+                    <Square className="w-3.5 h-3.5 mr-1.5 fill-current" />
+                    Stop Batch
+                  </Button>
+                </div>
               ) : (
                 <Button
                   variant="primary"
@@ -935,7 +1121,7 @@ export default function App() {
                               {/* Terminal Logs Icon Button for any job */}
                               <button
                                 onClick={() => {
-                                  setUserClosedConsole(false);
+                                  userClosedConsoleRef.current = false;
                                   setActiveConsoleJob(job);
                                 }}
                                 className="p-1.5 rounded text-slate-500 hover:text-cyan-400 hover:bg-slate-900 transition-colors"
@@ -1016,7 +1202,7 @@ export default function App() {
       <CommandConsoleModal
         isOpen={activeConsoleJob !== null}
         onClose={() => {
-          setUserClosedConsole(true);
+          userClosedConsoleRef.current = true;
           setActiveConsoleJob(null);
         }}
         job={jobs.find((j) => j.id === activeConsoleJob?.id) || activeConsoleJob}
