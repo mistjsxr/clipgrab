@@ -52,6 +52,26 @@ export async function initializeDatabaseTables(databaseUrl: string): Promise<{ s
       );
     `;
 
+    await sql`
+      CREATE TABLE IF NOT EXISTS media_history (
+        id TEXT PRIMARY KEY,
+        batch_id TEXT,
+        action_type TEXT,
+        original_job_id TEXT,
+        url TEXT NOT NULL,
+        title TEXT,
+        platform TEXT NOT NULL,
+        final_status TEXT NOT NULL,
+        file_path TEXT,
+        requested_by_device_id TEXT NOT NULL,
+        archived_at TIMESTAMP DEFAULT NOW() NOT NULL
+      );
+    `;
+
+    // Ensure columns exist on existing databases
+    await sql`ALTER TABLE media_history ADD COLUMN IF NOT EXISTS batch_id TEXT;`;
+    await sql`ALTER TABLE media_history ADD COLUMN IF NOT EXISTS action_type TEXT;`;
+
     return { success: true };
   } catch (err: any) {
     return { success: false, error: err?.message || 'Failed to initialize database tables' };

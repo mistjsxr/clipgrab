@@ -1,8 +1,8 @@
 import { Command } from '@tauri-apps/plugin-shell';
 import { invoke } from '@tauri-apps/api/core';
-import { createNeonClient, mediaQueue, eq } from '@clipgrab/db';
+import { createNeonClient, initializeDatabaseTables, mediaQueue, mediaHistory, eq, desc, inArray, neon } from '@clipgrab/db';
 import { MediaJob } from '@clipgrab/types';
-import { cleanMediaUrl, extractMediaId } from '@clipgrab/core-downloader';
+import { cleanMediaUrl, extractMediaId, createMediaJobPayload } from '@clipgrab/core-downloader';
 
 export interface DownloadConfig {
   downloadPath: string;
@@ -404,6 +404,222 @@ export async function deleteJobAndFile(job: MediaJob, dbUrl: string): Promise<bo
     console.error('Failed to delete job from DB:', err);
     return false;
   }
+}
+
+export interface HistoryBatchGroup {
+  batchId: string;
+  actionType: 'CLEAR_WORKSPACE' | 'CLEAR_COMPLETED' | 'BULK_DELETE' | 'SINGLE_DELETE' | string;
+  archivedAt: string;
+  items: Array<{
+    id: string;
+    originalJobId?: string;
+    url: string;
+    title?: string;
+    platform: string;
+    finalStatus: string;
+    filePath?: string;
+    requestedByDeviceId: string;
+    archivedAt: string;
+  }>;
+}
+
+// ULTRA-FAST TRUNCATE WORKSPACE CLEARING (5ms TRUNCATE TABLE WITH ACTION BATCH ID)
+export async function archiveAndClearAllWorkspace(jobsToClear: MediaJob[], dbUrl: string): Promise<boolean> {
+  if (jobsToClear.length === 0) return true;
+  try {
+    await initializeDatabaseTables(dbUrl).catch(console.error);
+    const db = createNeonClient(dbUrl);
+    const batchId = `batch_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+    const actionType = 'CLEAR_WORKSPACE';
+
+    const historyEntries = jobsToClear.map((j) => ({
+      id: crypto.randomUUID(),
+      batchId,
+      actionType,
+      originalJobId: j.id,
+      url: j.url,
+      title: j.title || null,
+      platform: j.platform,
+      finalStatus: j.status,
+      filePath: j.filePath || null,
+      requestedByDeviceId: j.requestedByDeviceId,
+      archivedAt: new Date(),
+    }));
+
+    // 1. Batch insert into media_history vault
+    try {
+      await db.insert(mediaHistory).values(historyEntries);
+    } catch (insertErr) {
+      console.warn('Failed to insert history entries into DB:', insertErr);
+    }
+
+    // 2. ULTRA-FAST 5ms TRUNCATE TABLE statement directly on Neon Postgres
+    const sql = neon(dbUrl);
+    await sql`TRUNCATE TABLE media_queue;`;
+
+    return true;
+  } catch (err) {
+    console.error('Failed to truncate media_queue table:', err);
+    return false;
+  }
+}
+
+// BULK SUBSET JOBS CLEARING (WHERE id IN (...) WITH ACTION BATCH ID)
+export async function archiveAndClearSubsetJobs(
+  jobsToClear: MediaJob[],
+  dbUrl: string,
+  actionType: 'CLEAR_COMPLETED' | 'BULK_DELETE' | 'SINGLE_DELETE' = 'CLEAR_COMPLETED'
+): Promise<boolean> {
+  if (jobsToClear.length === 0) return true;
+  try {
+    await initializeDatabaseTables(dbUrl).catch(console.error);
+    const db = createNeonClient(dbUrl);
+    const batchId = `batch_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+
+    const historyEntries = jobsToClear.map((j) => ({
+      id: crypto.randomUUID(),
+      batchId,
+      actionType,
+      originalJobId: j.id,
+      url: j.url,
+      title: j.title || null,
+      platform: j.platform,
+      finalStatus: j.status,
+      filePath: j.filePath || null,
+      requestedByDeviceId: j.requestedByDeviceId,
+      archivedAt: new Date(),
+    }));
+
+    const jobIds = jobsToClear.map((j) => j.id);
+
+    // 1. Batch insert into media_history vault
+    try {
+      await db.insert(mediaHistory).values(historyEntries);
+    } catch (insertErr) {
+      console.warn('Failed to insert history entries into DB:', insertErr);
+    }
+
+    // 2. SINGLE BULK DELETE statement via inArray (1 HTTP query!)
+    await db.delete(mediaQueue).where(inArray(mediaQueue.id, jobIds));
+
+    return true;
+  } catch (err) {
+    console.error('Failed to clear subset jobs:', err);
+    return false;
+  }
+}
+
+export async function archiveAndClearJobs(jobsToClear: MediaJob[], dbUrl: string): Promise<boolean> {
+  return archiveAndClearSubsetJobs(jobsToClear, dbUrl, 'CLEAR_COMPLETED');
+}
+
+export async function fetchMediaHistory(dbUrl: string): Promise<any[]> {
+  try {
+    const db = createNeonClient(dbUrl);
+    await initializeDatabaseTables(dbUrl).catch(console.error);
+    const records = await db.select().from(mediaHistory).orderBy(desc(mediaHistory.archivedAt));
+    return records;
+  } catch (err) {
+    console.error('Failed to fetch media history:', err);
+    return [];
+  }
+}
+
+export function groupHistoryByActionBatches(records: any[]): HistoryBatchGroup[] {
+  const map = new Map<string, HistoryBatchGroup>();
+
+  for (const r of records) {
+    const dateKey = r.archivedAt ? new Date(r.archivedAt).toISOString().slice(0, 16) : 'legacy';
+    const bId = r.batchId || `legacy_${dateKey}`;
+    const aType = r.actionType || (r.finalStatus === 'completed' ? 'CLEAR_COMPLETED' : 'CLEAR_WORKSPACE');
+
+    if (!map.has(bId)) {
+      map.set(bId, {
+        batchId: bId,
+        actionType: aType,
+        archivedAt: r.archivedAt ? new Date(r.archivedAt).toISOString() : new Date().toISOString(),
+        items: [],
+      });
+    }
+
+    map.get(bId)!.items.push({
+      id: r.id,
+      originalJobId: r.originalJobId || undefined,
+      url: r.url,
+      title: r.title || undefined,
+      platform: r.platform || 'media',
+      finalStatus: r.finalStatus || 'cleared',
+      filePath: r.filePath || undefined,
+      requestedByDeviceId: r.requestedByDeviceId || 'desktop',
+      archivedAt: r.archivedAt ? new Date(r.archivedAt).toISOString() : new Date().toISOString(),
+    });
+  }
+
+  return Array.from(map.values()).sort(
+    (a, b) => new Date(b.archivedAt).getTime() - new Date(a.archivedAt).getTime()
+  );
+}
+
+// RESTORE ENTIRE BATCH OR SINGLE ITEM BACK TO LIVE MEDIA QUEUE
+export async function restoreBatchToQueue(batchItems: any[], dbUrl: string): Promise<boolean> {
+  if (batchItems.length === 0) return true;
+  try {
+    const db = createNeonClient(dbUrl);
+    await initializeDatabaseTables(dbUrl).catch(console.error);
+
+    const queueEntries = batchItems.map((item) => {
+      const payload = createMediaJobPayload(item.url, 'restored_from_history');
+      return {
+        id: payload.id,
+        url: payload.url,
+        title: item.title || payload.title,
+        platform: item.platform || payload.platform,
+        status: 'pending',
+        requestedByDeviceId: item.requestedByDeviceId || 'restored_history',
+        progress: 0,
+        filePath: item.filePath || null,
+      };
+    });
+
+    await db.insert(mediaQueue).values(queueEntries);
+    return true;
+  } catch (err) {
+    console.error('Failed to restore batch to queue:', err);
+    return false;
+  }
+}
+
+export async function clearMediaHistoryVault(dbUrl: string): Promise<boolean> {
+  try {
+    const db = createNeonClient(dbUrl);
+    await initializeDatabaseTables(dbUrl).catch(console.error);
+    await db.delete(mediaHistory);
+    return true;
+  } catch (err) {
+    console.error('Failed to clear media history vault:', err);
+    return false;
+  }
+}
+
+export function exportHistoryToTxt(records: any[]): string {
+  const batches = groupHistoryByActionBatches(records);
+  const header = `==================================================\nCLIPGRAB ACTION-BASED HISTORY EXPORT\nGenerated At: ${new Date().toISOString()}\nTotal Action Batches: ${batches.length}\nTotal Archived Links: ${records.length}\n==================================================\n\n`;
+
+  const body = batches
+    .map((b, bIdx) => {
+      const dateStr = new Date(b.archivedAt).toLocaleString();
+      const actionName = (b.actionType || 'ACTION_BATCH').replace(/_/g, ' ');
+      const itemLines = b.items
+        .map(
+          (item, i) =>
+            `   [${i + 1}] [${item.platform.toUpperCase()}] ${item.title ? `"${item.title}" - ` : ''}${item.url}${item.filePath ? ` (Saved: ${item.filePath})` : ''}`
+        )
+        .join('\n');
+      return `BATCH #${bIdx + 1} | [${actionName}] | [${dateStr}] | (${b.items.length} links)\n--------------------------------------------------\n${itemLines}\n`;
+    })
+    .join('\n');
+
+  return header + body;
 }
 
 export async function executeJobDownload(

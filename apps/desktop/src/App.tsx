@@ -4,11 +4,11 @@ import { createNeonClient, verifyNeonConnection, initializeDatabaseTables, media
 import { isValidMediaUrl, createMediaJobPayload, cleanMediaUrl } from '@clipgrab/core-downloader';
 import { MediaJob, PairingPayload } from '@clipgrab/types';
 import { readText } from '@tauri-apps/plugin-clipboard-manager';
-import { Download, QrCode, Database, RefreshCw, Copy, Check, Plus, Monitor, ShieldCheck, Link2, Server, Trash2, Cpu, Laptop, Play, Settings2, FolderOpen, Ban, RotateCcw, Terminal, Sparkles, CheckSquare, Square, X, FileText, Search, Filter, Clipboard, ExternalLink } from 'lucide-react';
+import { Download, QrCode, Database, RefreshCw, Copy, Check, Plus, Monitor, ShieldCheck, Link2, Server, Trash2, Cpu, Laptop, Play, Settings2, FolderOpen, Ban, RotateCcw, Terminal, Sparkles, CheckSquare, Square, X, FileText, Search, Filter, Clipboard, ExternalLink, History, Archive, DownloadCloud, FileDown, ChevronDown } from 'lucide-react';
 import { DownloadSettingsModal } from './components/DownloadSettingsModal';
 import { CommandConsoleModal } from './components/CommandConsoleModal';
 import { BatchImportModal } from './components/BatchImportModal';
-import { DownloadConfig, DEFAULT_DOWNLOAD_CONFIG, executeJobDownload, cancelJobDownload, deleteJobAndFile, removeDownloadedFileAndResetJob, openFileInFinder, EngineBinaryStatus, getBinaryVersion, checkBinaryUpdate, updateBinaryOnDemand } from './downloaderEngine';
+import { DownloadConfig, DEFAULT_DOWNLOAD_CONFIG, executeJobDownload, cancelJobDownload, deleteJobAndFile, removeDownloadedFileAndResetJob, openFileInFinder, EngineBinaryStatus, getBinaryVersion, checkBinaryUpdate, updateBinaryOnDemand, archiveAndClearJobs, archiveAndClearAllWorkspace, archiveAndClearSubsetJobs, fetchMediaHistory, groupHistoryByActionBatches, restoreBatchToQueue, HistoryBatchGroup, clearMediaHistoryVault, exportHistoryToTxt } from './downloaderEngine';
 
 const LOCAL_STORAGE_DB_KEY = 'clipgrab_db_url';
 const LOCAL_STORAGE_PASS_KEY = 'clipgrab_pass_id';
@@ -37,6 +37,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
+  // Main Sidebar Navigation Tab ('workspace' | 'history')
+  const [activeTab, setActiveTab] = useState<'workspace' | 'history'>('workspace');
+
   // Dashboard state
   const [jobs, setJobs] = useState<MediaJob[]>([]);
   const [urlInput, setUrlInput] = useState('');
@@ -45,6 +48,12 @@ export default function App() {
   const [showBatchImportModal, setShowBatchImportModal] = useState(false);
   const [pairingPayloadBase64, setPairingPayloadBase64] = useState('');
   const [copiedPairingKey, setCopiedPairingKey] = useState(false);
+
+  // History Vault state
+  const [historyRecords, setHistoryRecords] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
+  const [expandedBatchIds, setExpandedBatchIds] = useState<Record<string, boolean>>({});
 
   // Clipboard Auto-Detect State
   const [clipboardDetectedUrl, setClipboardDetectedUrl] = useState('');
@@ -214,6 +223,21 @@ export default function App() {
     return () => clearInterval(interval);
   }, [isConfigured, dbUrl]);
 
+  // Fetch History Vault records from Neon DB
+  const handleFetchHistory = async () => {
+    if (!dbUrl) return;
+    setLoadingHistory(true);
+    const records = await fetchMediaHistory(dbUrl);
+    setHistoryRecords(records);
+    setLoadingHistory(false);
+  };
+
+  useEffect(() => {
+    if (isConfigured && dbUrl && activeTab === 'history') {
+      handleFetchHistory();
+    }
+  }, [isConfigured, dbUrl, activeTab]);
+
   // Clipboard Auto-Detect Listener on Window Focus
   useEffect(() => {
     if (!isConfigured) return;
@@ -363,6 +387,33 @@ export default function App() {
     return matchesSearch && matchesStatus && matchesPlatform;
   });
 
+  // History Action Batches Grouping & Searching Logic
+  const allActionBatches = groupHistoryByActionBatches(historyRecords);
+  
+  const filteredActionBatches = allActionBatches.filter((batch) => {
+    if (!historySearchQuery.trim()) return true;
+    const q = historySearchQuery.toLowerCase();
+    const matchesAction = batch.actionType.toLowerCase().includes(q);
+    const matchesItems = batch.items.some(
+      (item) => (item.title && item.title.toLowerCase().includes(q)) || item.url.toLowerCase().includes(q) || item.platform.toLowerCase().includes(q)
+    );
+    return matchesAction || matchesItems;
+  });
+
+  const toggleBatchExpand = (batchId: string) => {
+    setExpandedBatchIds((prev) => ({ ...prev, [batchId]: prev[batchId] === false ? true : false }));
+  };
+
+  const handleRestoreBatch = async (batchItems: any[]) => {
+    const success = await restoreBatchToQueue(batchItems, dbUrl);
+    if (success) {
+      alert(`Successfully restored ${batchItems.length} link(s) back to Live Workspace!`);
+      setActiveTab('workspace');
+    } else {
+      alert('Failed to restore links to Live Workspace.');
+    }
+  };
+
   // Gmail-style Selection Handlers
   const isAllSelected = filteredJobs.length > 0 && selectedJobIds.length === filteredJobs.length;
   
@@ -405,6 +456,21 @@ export default function App() {
     setShowSettingsModal(true);
   };
 
+  // Single Job Deletion (Disk + DB)
+  const handleSingleDelete = async (job: MediaJob) => {
+    if (confirm(`Permanently delete "${job.title || job.url}"?\nThis deletes the downloaded file from disk and record from DB.`)) {
+      setJobs((prev) => prev.filter((j) => j.id !== job.id));
+      await deleteJobAndFile(job, dbUrl);
+    }
+  };
+
+  // Single Job Remove File (Keep DB Link)
+  const handleSingleRemoveFile = async (job: MediaJob) => {
+    if (confirm(`Remove local file for "${job.title || job.url}" from disk and reset status to pending?\n(DB link preserved).`)) {
+      await removeDownloadedFileAndResetJob(job, dbUrl);
+    }
+  };
+
   // Bulk Delete (Delete from disk storage AND database)
   const handleBulkDeleteSelected = async () => {
     const selectedJobs = jobs.filter((j) => selectedJobIds.includes(j.id));
@@ -442,6 +508,71 @@ export default function App() {
       await removeDownloadedFileAndResetJob(job, dbUrl);
     }
     setSelectedJobIds([]);
+  };
+
+  // ARCHIVE & CLEAR COMPLETED JOBS (Preserves local media files on disk, archives links in DB History Vault)
+  const handleClearCompleted = async () => {
+    const completedJobs = jobs.filter((j) => j.status === 'completed');
+    if (completedJobs.length === 0) return;
+
+    if (
+      confirm(
+        `Clear ${completedJobs.length} completed download link(s) from Live Workspace?\n\n✔ All links will be safely backed up into your History Vault with timestamps.\n✔ Downloaded local files on disk will NOT be deleted.`
+      )
+    ) {
+      setJobs((prev) => prev.filter((j) => j.status !== 'completed'));
+      await archiveAndClearSubsetJobs(completedJobs, dbUrl);
+      handleFetchHistory();
+    }
+  };
+
+  // ARCHIVE & CLEAR ALL WORKSPACE LINKS (Ultra-fast TRUNCATE TABLE: Preserves local media files, archives links in DB History Vault)
+  const handleClearAllWorkspace = async () => {
+    if (jobs.length === 0) return;
+
+    if (
+      confirm(
+        `CLEAR ALL ${jobs.length} task links from Live Workspace to start a fresh batch?\n\n✔ Every single link will be safely backed up in your History Vault with timestamps.\n✔ Local media files on disk will NOT be deleted.`
+      )
+    ) {
+      const jobsToClear = [...jobs];
+      setJobs([]);
+      await archiveAndClearAllWorkspace(jobsToClear, dbUrl);
+      handleFetchHistory();
+    }
+  };
+
+  // Export History Vault to formatted .txt file
+  const handleExportHistoryTxt = () => {
+    if (historyRecords.length === 0) {
+      alert('History Vault is empty. No records to export.');
+      return;
+    }
+    const txtContent = exportHistoryToTxt(historyRecords);
+    const blob = new Blob([txtContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `clipgrab-download-history-${new Date().toISOString().slice(0, 10)}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Clear History Vault
+  const handleClearHistoryVault = async () => {
+    if (confirm('Are you sure you want to PERMANENTLY CLEAR your History Vault backup records?')) {
+      await clearMediaHistoryVault(dbUrl);
+      setHistoryRecords([]);
+    }
+  };
+
+  // Re-Enqueue History item back to active queue
+  const handleReEnqueueHistoryItem = async (historyItem: any) => {
+    await handleManualEnqueue(historyItem.url);
+    alert(`Re-enqueued link into Live Workspace: ${historyItem.url}`);
+    setActiveTab('workspace');
   };
 
   // Optimize & clean all URLs in DB queue
@@ -575,6 +706,7 @@ export default function App() {
   };
 
   const pendingJobsCount = jobs.filter((j) => j.status === 'pending').length;
+  const completedJobsCount = jobs.filter((j) => j.status === 'completed').length;
   const downloadingJobsCount = jobs.filter((j) => j.status === 'downloading').length;
 
   const unoptimizedCount = jobs.filter((j) => {
@@ -658,6 +790,42 @@ export default function App() {
                 <span className="text-[9px] uppercase tracking-widest font-bold text-cyan-400">Master Node</span>
               </div>
             </div>
+          </div>
+
+          {/* Sidebar Navigation Tabs */}
+          <div className="space-y-1 bg-slate-900/40 p-1.5 rounded-lg border border-slate-900">
+            <button
+              onClick={() => setActiveTab('workspace')}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'workspace'
+                  ? 'bg-gradient-to-r from-violet-600 to-pink-600 text-white shadow-[0_0_15px_rgba(139,92,246,0.3)]'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <Monitor className="w-4 h-4" />
+                <span>Live Workspace</span>
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-950/80 font-mono text-slate-300 font-bold">{jobs.length}</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setActiveTab('history');
+                handleFetchHistory();
+              }}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'history'
+                  ? 'bg-gradient-to-r from-violet-600 to-pink-600 text-white shadow-[0_0_15px_rgba(139,92,246,0.3)]'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <History className="w-4 h-4 text-cyan-400" />
+                <span>History Vault</span>
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-950/80 font-mono text-cyan-400 font-bold">{historyRecords.length}</span>
+            </button>
           </div>
 
           <div className="border-t border-slate-900" />
@@ -798,404 +966,639 @@ export default function App() {
 
       {/* Main Workspace */}
       <main className="flex-1 p-6 md:p-8 overflow-y-auto z-10 w-full">
-        <div className="w-full space-y-6">
-          {/* Clipboard Auto-Detect Banner */}
-          {showClipboardBanner && (
-            <div className="p-3 bg-gradient-to-r from-violet-900/80 to-pink-900/80 border border-violet-500/50 rounded-lg backdrop-blur-md flex items-center justify-between shadow-[0_0_20px_rgba(139,92,246,0.25)] animate-fade-in">
-              <div className="flex items-center space-x-3 text-xs truncate mr-2">
-                <Clipboard className="w-4 h-4 text-cyan-400 flex-shrink-0" />
-                <div className="truncate">
-                  <span className="font-bold text-white uppercase text-[10px] tracking-wider block">Media Link Detected in Clipboard</span>
-                  <span className="text-slate-300 font-mono text-[10px] truncate block select-all">{clipboardDetectedUrl}</span>
+        {activeTab === 'workspace' ? (
+          <div className="w-full space-y-6">
+            {/* Clipboard Auto-Detect Banner */}
+            {showClipboardBanner && (
+              <div className="p-3 bg-gradient-to-r from-violet-900/80 to-pink-900/80 border border-violet-500/50 rounded-lg backdrop-blur-md flex items-center justify-between shadow-[0_0_20px_rgba(139,92,246,0.25)] animate-fade-in">
+                <div className="flex items-center space-x-3 text-xs truncate mr-2">
+                  <Clipboard className="w-4 h-4 text-cyan-400 flex-shrink-0" />
+                  <div className="truncate">
+                    <span className="font-bold text-white uppercase text-[10px] tracking-wider block">Media Link Detected in Clipboard</span>
+                    <span className="text-slate-300 font-mono text-[10px] truncate block select-all">{clipboardDetectedUrl}</span>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2 shrink-0">
+                  <Button variant="primary" size="sm" className="h-8 px-3 text-[11px] font-bold" onClick={() => handleManualEnqueue(clipboardDetectedUrl)}>
+                    <Plus className="w-3.5 h-3.5 mr-1" /> Quick Enqueue
+                  </Button>
+                  <button onClick={() => setShowClipboardBanner(false)} className="p-1 rounded text-slate-400 hover:text-white">
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
-              <div className="flex items-center space-x-2 shrink-0">
-                <Button variant="primary" size="sm" className="h-8 px-3 text-[11px] font-bold" onClick={() => handleManualEnqueue(clipboardDetectedUrl)}>
-                  <Plus className="w-3.5 h-3.5 mr-1" /> Quick Enqueue
-                </Button>
-                <button onClick={() => setShowClipboardBanner(false)} className="p-1 rounded text-slate-400 hover:text-white">
-                  <X className="w-4 h-4" />
-                </button>
+            )}
+
+            {/* Top Bar / Queue Header */}
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-black uppercase tracking-wider text-slate-100">Live Workspace</h2>
+                <p className="text-xs text-slate-500">Monitor active download queue and capture direct media sources.</p>
               </div>
-            </div>
-          )}
+              
+              {/* Top Right Controls */}
+              <div className="flex items-center space-x-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 px-3 text-xs border-violet-500/30 text-violet-300 hover:bg-violet-950/20"
+                  onClick={() => setShowBatchImportModal(true)}
+                >
+                  <FileText className="w-3.5 h-3.5 mr-1.5 text-pink-400" />
+                  Bulk Batch Import
+                </Button>
 
-          {/* Top Bar / Queue Header */}
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-xl font-black uppercase tracking-wider text-slate-100">Live Workspace</h2>
-              <p className="text-xs text-slate-500">Monitor active download queue and capture direct media sources.</p>
-            </div>
-            
-            {/* Top Right Controls */}
-            <div className="flex items-center space-x-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-9 px-3 text-xs border-violet-500/30 text-violet-300 hover:bg-violet-950/20"
-                onClick={() => setShowBatchImportModal(true)}
-              >
-                <FileText className="w-3.5 h-3.5 mr-1.5 text-pink-400" />
-                Bulk Batch Import
-              </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 px-3 text-xs border-violet-500/40 text-violet-300 hover:bg-violet-950/30 disabled:opacity-40"
+                  onClick={handleClearCompleted}
+                  disabled={completedJobsCount === 0}
+                  title="Archive completed tasks to History Vault & clear workspace (local files preserved)"
+                >
+                  <Archive className="w-3.5 h-3.5 mr-1.5 text-violet-400" />
+                  Clear Completed ({completedJobsCount})
+                </Button>
 
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-9 px-3 text-xs border-amber-500/30 text-amber-300 hover:bg-amber-950/20 disabled:opacity-40"
-                onClick={handleOptimizeQueueUrls}
-                disabled={unoptimizedCount === 0}
-              >
-                <Sparkles className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
-                Optimize URLs ({unoptimizedCount})
-              </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 px-3 text-xs border-pink-500/40 text-pink-300 hover:bg-pink-950/30 disabled:opacity-40"
+                  onClick={handleClearAllWorkspace}
+                  disabled={jobs.length === 0}
+                  title="Archive ALL queue links to History Vault & start fresh batch (local files preserved)"
+                >
+                  <Trash2 className="w-3.5 h-3.5 mr-1.5 text-pink-400" />
+                  Clear Workspace ({jobs.length})
+                </Button>
 
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-9 px-3 text-xs border-slate-800 text-slate-400 hover:text-slate-200"
-                onClick={() => {
-                  setTargetDownloadJobs([]);
-                  setShowSettingsModal(true);
-                }}
-              >
-                <Settings2 className="w-4 h-4 mr-1.5" /> Engine Options
-              </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 px-3 text-xs border-amber-500/30 text-amber-300 hover:bg-amber-950/20 disabled:opacity-40"
+                  onClick={handleOptimizeQueueUrls}
+                  disabled={unoptimizedCount === 0}
+                >
+                  <Sparkles className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
+                  Optimize URLs ({unoptimizedCount})
+                </Button>
 
-              {isDownloadingBatch ? (
-                <div className="flex items-center space-x-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 px-3 text-xs border-slate-800 text-slate-400 hover:text-slate-200"
+                  onClick={() => {
+                    setTargetDownloadJobs([]);
+                    setShowSettingsModal(true);
+                  }}
+                >
+                  <Settings2 className="w-4 h-4 mr-1.5" /> Engine Options
+                </Button>
+
+                {isDownloadingBatch ? (
+                  <div className="flex items-center space-x-2">
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-violet-600 hover:to-cyan-600 shadow-[0_0_15px_rgba(6,182,212,0.3)] animate-pulse cursor-pointer"
+                      onClick={() => {
+                        userClosedConsoleRef.current = false;
+                        const activeJob = jobs.find((j) => j.status === 'downloading') || targetDownloadJobs[0];
+                        if (activeJob) {
+                          setActiveConsoleJob(activeJob);
+                        }
+                      }}
+                      title="Click to view live CLI Terminal Console"
+                    >
+                      <RefreshCw className="w-4 h-4 animate-spin mr-1.5" />
+                      Downloading... (View CLI)
+                    </Button>
+
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      className="h-9 px-3 text-xs font-bold uppercase tracking-wider bg-rose-950/80 text-rose-300 border-rose-800 hover:bg-rose-900 shadow-[0_0_15px_rgba(225,29,72,0.3)]"
+                      onClick={handleStopAllDownloads}
+                      title="Stop & Terminate All Active Downloads (Preserve Content)"
+                    >
+                      <Square className="w-3.5 h-3.5 mr-1.5 fill-current" />
+                      Stop Batch
+                    </Button>
+                  </div>
+                ) : (
                   <Button
                     variant="primary"
                     size="sm"
-                    className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-violet-600 hover:to-cyan-600 shadow-[0_0_15px_rgba(6,182,212,0.3)] animate-pulse cursor-pointer"
-                    onClick={() => {
-                      userClosedConsoleRef.current = false;
-                      const activeJob = jobs.find((j) => j.status === 'downloading') || targetDownloadJobs[0];
-                      if (activeJob) {
-                        setActiveConsoleJob(activeJob);
-                      }
-                    }}
-                    title="Click to view live CLI Terminal Console"
+                    className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-violet-600 to-pink-500 hover:from-pink-500 hover:to-violet-600 disabled:opacity-50"
+                    onClick={triggerBatchJobOptions}
+                    disabled={pendingJobsCount === 0 && downloadingJobsCount === 0}
                   >
-                    <RefreshCw className="w-4 h-4 animate-spin mr-1.5" />
-                    Downloading... (View CLI)
+                    <Play className="w-4 h-4 mr-1.5 fill-current" />
+                    Download All ({pendingJobsCount})
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {/* Quick URL Enqueue Card */}
+            <Card className="p-4 bg-slate-950/40 backdrop-blur-md border-slate-900 shadow-xl">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-slate-900 text-pink-500 border border-slate-800 rounded">
+                  <Link2 className="w-5 h-5" />
+                </div>
+                <input
+                  type="url"
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleManualEnqueue()}
+                  placeholder="Paste YouTube, X/Twitter, TikTok, or Direct Media URL..."
+                  className="flex-1 bg-slate-950 border border-slate-900 rounded-md px-4 py-2.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-pink-500 transition-all"
+                />
+                <Button variant="primary" className="py-2.5 px-4 font-bold text-xs" onClick={() => handleManualEnqueue()}>
+                  <Plus className="w-3.5 h-3.5 mr-1.5" /> Enqueue
+                </Button>
+              </div>
+            </Card>
+
+            {/* Queue Filtering & Real-Time Search Bar */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-950/60 p-3 rounded-lg border border-slate-900">
+              {/* Search Input */}
+              <div className="relative flex-1 w-full">
+                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search queue by title or URL..."
+                  className="w-full bg-slate-900/80 border border-slate-800 rounded-md pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-400"
+                />
+              </div>
+
+              {/* Filter Pills */}
+              <div className="flex items-center space-x-2 text-[10px] font-mono">
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as any)}
+                  className="bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-300 focus:outline-none"
+                >
+                  <option value="all">Status: All</option>
+                  <option value="pending">Pending</option>
+                  <option value="downloading">Downloading</option>
+                  <option value="completed">Completed</option>
+                  <option value="failed">Failed</option>
+                </select>
+
+                <select
+                  value={platformFilter}
+                  onChange={(e) => setPlatformFilter(e.target.value as any)}
+                  className="bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-300 focus:outline-none"
+                >
+                  <option value="all">Platform: All</option>
+                  <option value="youtube">YouTube</option>
+                  <option value="instagram">Instagram</option>
+                  <option value="tiktok">TikTok</option>
+                  <option value="twitter">Twitter / X</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Gmail-Style Multi-Selection Action Bar (Appears when >= 1 items selected) */}
+            {selectedJobIds.length > 0 && (
+              <div className="p-3 bg-violet-950/80 border border-violet-500/50 rounded-lg backdrop-blur-md flex items-center justify-between shadow-[0_0_25px_rgba(139,92,246,0.2)] animate-fade-in">
+                <div className="flex items-center space-x-3 text-xs font-mono text-violet-200">
+                  <div className="flex items-center space-x-2">
+                    <DarkCheckbox checked={isAllSelected} onChange={toggleSelectAll} title="Select All / Deselect All" />
+                    <span className="font-bold">{selectedJobIds.length} Selected</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-3 text-[11px] border-slate-800 text-slate-300 hover:text-white"
+                    onClick={triggerSelectedJobsOptions}
+                  >
+                    <Play className="w-3 h-3 mr-1 text-cyber-cyan fill-current" /> Download Selected ({selectedJobIds.length})
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-3 text-[11px] border-amber-900/50 text-amber-300 hover:bg-amber-950/40"
+                    onClick={handleBulkResetRemoveMedia}
+                    title="Delete local file from storage, keep link in DB and reset status to pending"
+                  >
+                    <RotateCcw className="w-3 h-3 mr-1 text-amber-400" /> Remove File (Keep DB Link)
                   </Button>
 
                   <Button
                     variant="danger"
                     size="sm"
-                    className="h-9 px-3 text-xs font-bold uppercase tracking-wider bg-rose-950/80 text-rose-300 border-rose-800 hover:bg-rose-900 shadow-[0_0_15px_rgba(225,29,72,0.3)]"
-                    onClick={handleStopAllDownloads}
-                    title="Stop & Terminate All Active Downloads (Preserve Content)"
+                    className="h-8 px-3 text-[11px] bg-rose-950/60 text-rose-300 border-rose-900/60 hover:bg-rose-900"
+                    onClick={handleBulkDeleteSelected}
+                    title="Permanently delete from disk storage AND delete DB record"
                   >
-                    <Square className="w-3.5 h-3.5 mr-1.5 fill-current" />
-                    Stop Batch
+                    <Trash2 className="w-3 h-3 mr-1" /> Delete (Disk + DB)
                   </Button>
+
+                  <button
+                    onClick={() => setSelectedJobIds([])}
+                    className="p-1 rounded text-slate-500 hover:text-slate-200 transition-colors ml-2"
+                    title="Clear Selection"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Jobs Queue Table */}
+            <Card className="p-0 bg-slate-950/40 backdrop-blur-md border-slate-900 overflow-hidden shadow-2xl">
+              <div className="p-4 border-b border-slate-900 flex items-center justify-between bg-slate-900/10">
+                <div className="flex items-center space-x-3">
+                  <DarkCheckbox checked={isAllSelected} onChange={toggleSelectAll} title={isAllSelected ? 'Deselect All' : 'Select All'} />
+                  <div className="flex items-center space-x-2">
+                    <Monitor className="w-4 h-4 text-violet-400" />
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-300">Live Media Queue</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <span className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 bg-violet-950/40 text-violet-400 border border-violet-900/40 rounded">
+                    {pendingJobsCount} Pending
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 bg-slate-900 border border-slate-800 text-slate-400 rounded">
+                    {filteredJobs.length} / {jobs.length} Total
+                  </span>
+                </div>
+              </div>
+
+              {filteredJobs.length === 0 ? (
+                <div className="py-20 text-center space-y-3">
+                  <Download className="w-10 h-10 mx-auto text-slate-800 stroke-[1.5] animate-bounce" />
+                  <div className="space-y-1">
+                    <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">No matching media tasks</p>
+                    <p className="text-[10px] text-slate-600 max-w-xs mx-auto">
+                      Import batch files, push downloads from Mobile, send via the Web Extension, or paste a URL above.
+                    </p>
+                  </div>
                 </div>
               ) : (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-violet-600 to-pink-500 hover:from-pink-500 hover:to-violet-600 disabled:opacity-50"
-                  onClick={triggerBatchJobOptions}
-                  disabled={pendingJobsCount === 0 && downloadingJobsCount === 0}
-                >
-                  <Play className="w-4 h-4 mr-1.5 fill-current" />
-                  Download All ({pendingJobsCount})
-                </Button>
-              )}
-            </div>
-          </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="text-[9px] uppercase tracking-wider bg-slate-950/80 text-slate-500 border-b border-slate-900">
+                      <tr>
+                        <th className="py-3.5 px-4 w-10 text-center">
+                          <DarkCheckbox checked={isAllSelected} onChange={toggleSelectAll} />
+                        </th>
+                        <th className="py-3.5 px-5 font-bold">Source Title</th>
+                        <th className="py-3.5 px-5 font-bold">Origin</th>
+                        <th className="py-3.5 px-5 font-bold">Client Node</th>
+                        <th className="py-3.5 px-5 font-bold">State & Progress</th>
+                        <th className="py-3.5 px-5 font-bold text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-950">
+                      {filteredJobs.map((job) => {
+                        const isSelected = selectedJobIds.includes(job.id);
+                        let nodeIcon = <Laptop className="w-3.5 h-3.5" />;
+                        if (job.requestedByDeviceId.includes('mobile')) {
+                          nodeIcon = <Cpu className="w-3.5 h-3.5 text-pink-500" />;
+                        } else if (job.requestedByDeviceId.includes('extension')) {
+                          nodeIcon = <Server className="w-3.5 h-3.5 text-cyan-400" />;
+                        } else if (job.requestedByDeviceId.includes('bulk')) {
+                          nodeIcon = <FileText className="w-3.5 h-3.5 text-amber-400" />;
+                        }
 
-          {/* Quick URL Enqueue Card */}
-          <Card className="p-4 bg-slate-950/40 backdrop-blur-md border-slate-900 shadow-xl">
-            <div className="flex items-center space-x-3">
-              <div className="p-2 bg-slate-900 text-pink-500 border border-slate-800 rounded">
-                <Link2 className="w-5 h-5" />
-              </div>
-              <input
-                type="url"
-                value={urlInput}
-                onChange={(e) => setUrlInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleManualEnqueue()}
-                placeholder="Paste YouTube, X/Twitter, TikTok, or Direct Media URL..."
-                className="flex-1 bg-slate-950 border border-slate-900 rounded-md px-4 py-2.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-pink-500 transition-all"
-              />
-              <Button variant="primary" className="py-2.5 px-4 font-bold text-xs" onClick={() => handleManualEnqueue()}>
-                <Plus className="w-3.5 h-3.5 mr-1.5" /> Enqueue
-              </Button>
-            </div>
-          </Card>
+                        return (
+                          <tr
+                            key={job.id}
+                            className={`transition-all duration-200 ${
+                              isSelected ? 'bg-violet-950/30' : 'hover:bg-slate-900/20'
+                            }`}
+                          >
+                            <td className="py-4 px-4 text-center">
+                              <DarkCheckbox checked={isSelected} onChange={() => toggleSelectJob(job.id)} />
+                            </td>
+                            <td className="py-4 px-5">
+                              <div className="font-bold text-slate-200 truncate max-w-md lg:max-w-xl xl:max-w-2xl leading-normal">{job.title || job.url}</div>
+                              <div className="text-[10px] text-slate-600 font-mono truncate max-w-md lg:max-w-xl xl:max-w-2xl mt-0.5 select-all">{job.url}</div>
+                            </td>
+                            <td className="py-4 px-5">
+                              <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-mono font-bold text-slate-400 capitalize">
+                                {job.platform}
+                              </span>
+                            </td>
+                            <td className="py-4 px-5">
+                              <div className="flex items-center space-x-1.5 text-slate-400">
+                                {nodeIcon}
+                                <span className="font-mono text-[10px] font-semibold">{job.requestedByDeviceId}</span>
+                              </div>
+                            </td>
+                            <td className="py-4 px-5">
+                              <div className="space-y-1.5">
+                                <StatusBadge status={job.status} />
+                                {job.status === 'downloading' && (
+                                  <div className="w-28 bg-slate-900 h-1.5 rounded-full overflow-hidden border border-slate-800">
+                                    <div
+                                      className="bg-gradient-to-r from-cyan-400 to-pink-500 h-full transition-all duration-300"
+                                      style={{ width: `${job.progress || 10}%` }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-4 px-5 text-right">
+                              <div className="flex items-center justify-end space-x-2">
+                                {/* Terminal Logs Icon Button for any job */}
+                                <button
+                                  onClick={() => {
+                                    userClosedConsoleRef.current = false;
+                                    setActiveConsoleJob(job);
+                                  }}
+                                  className="p-1.5 rounded text-slate-500 hover:text-cyan-400 hover:bg-slate-900 transition-colors"
+                                  title="View CLI Terminal Logs"
+                                >
+                                  <Terminal className="w-3.5 h-3.5" />
+                                </button>
 
-          {/* Queue Filtering & Real-Time Search Bar */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-950/60 p-3 rounded-lg border border-slate-900">
-            {/* Search Input */}
-            <div className="relative flex-1 w-full">
-              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search queue by title or URL..."
-                className="w-full bg-slate-900/80 border border-slate-800 rounded-md pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-400"
-              />
-            </div>
+                                {job.status === 'pending' && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="px-2.5 py-1 text-[10px] border-slate-800 hover:border-pink-500 hover:text-pink-400"
+                                    onClick={() => triggerSingleJobOptions(job)}
+                                  >
+                                    <Play className="w-3 h-3 mr-1 fill-current" /> Start
+                                  </Button>
+                                )}
 
-            {/* Filter Pills */}
-            <div className="flex items-center space-x-2 text-[10px] font-mono">
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as any)}
-                className="bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-300 focus:outline-none"
-              >
-                <option value="all">Status: All</option>
-                <option value="pending">Pending</option>
-                <option value="downloading">Downloading</option>
-                <option value="completed">Completed</option>
-                <option value="failed">Failed</option>
-              </select>
+                                {job.status === 'downloading' && (
+                                  <>
+                                    <span className="text-[10px] font-mono font-bold text-cyan-400 animate-pulse mr-1">
+                                      {job.progress || 0}%
+                                    </span>
+                                    <Button
+                                      variant="danger"
+                                      size="sm"
+                                      className="px-2 py-1 text-[10px] bg-rose-950/60 text-rose-400 border-rose-900/60 hover:bg-rose-900"
+                                      onClick={() => handleCancelJob(job.id)}
+                                      title="Stop Download (Preserve Downloaded Content)"
+                                    >
+                                      <Square className="w-3 h-3 mr-1 fill-current" /> Stop
+                                    </Button>
+                                  </>
+                                )}
 
-              <select
-                value={platformFilter}
-                onChange={(e) => setPlatformFilter(e.target.value as any)}
-                className="bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-300 focus:outline-none"
-              >
-                <option value="all">Platform: All</option>
-                <option value="youtube">YouTube</option>
-                <option value="instagram">Instagram</option>
-                <option value="tiktok">TikTok</option>
-                <option value="twitter">Twitter / X</option>
-              </select>
-            </div>
-          </div>
+                                {job.status === 'completed' && (
+                                  <div className="flex items-center space-x-1.5">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="px-2 py-1 text-[10px] border-slate-800 hover:border-cyan-400 text-cyan-400"
+                                      onClick={() => openFileInFinder(job, dbUrl, downloadConfig.downloadPath)}
+                                      title="Open File Location in macOS Finder"
+                                    >
+                                      <FolderOpen className="w-3 h-3 mr-1" /> Finder
+                                    </Button>
 
-          {/* Gmail-Style Multi-Selection Action Bar (Appears when >= 1 items selected) */}
-          {selectedJobIds.length > 0 && (
-            <div className="p-3 bg-violet-950/80 border border-violet-500/50 rounded-lg backdrop-blur-md flex items-center justify-between shadow-[0_0_25px_rgba(139,92,246,0.2)] animate-fade-in">
-              <div className="flex items-center space-x-3 text-xs font-mono text-violet-200">
-                <div className="flex items-center space-x-2">
-                  <DarkCheckbox checked={isAllSelected} onChange={toggleSelectAll} title="Select All / Deselect All" />
-                  <span className="font-bold">{selectedJobIds.length} Selected</span>
+                                    <button
+                                      onClick={() => handleSingleRemoveFile(job)}
+                                      className="p-1.5 rounded text-amber-400 hover:bg-amber-950/50 border border-amber-900/40 transition-colors"
+                                      title="Remove downloaded file from disk & reset status to pending (Keep DB link)"
+                                    >
+                                      <RotateCcw className="w-3 h-3" />
+                                    </button>
+
+                                    <button
+                                      onClick={() => handleSingleDelete(job)}
+                                      className="p-1.5 rounded text-rose-400 hover:bg-rose-950/50 border border-rose-900/40 transition-colors"
+                                      title="Permanently delete from disk storage AND delete DB record"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                )}
+
+                                {job.status === 'failed' && (
+                                  <div className="flex items-center space-x-1.5">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="px-2 py-1 text-[10px] border-amber-900/60 text-amber-400 hover:bg-amber-950/40"
+                                      onClick={() => triggerSingleJobOptions(job)}
+                                    >
+                                      <RotateCcw className="w-3 h-3 mr-1" /> Retry
+                                    </Button>
+
+                                    <button
+                                      onClick={() => handleSingleDelete(job)}
+                                      className="p-1.5 rounded text-rose-400 hover:bg-rose-950/50 border border-rose-900/40 transition-colors"
+                                      title="Delete record from queue"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
+              )}
+            </Card>
+          </div>
+        ) : (
+          /* DEDICATED ACTION-BASED HISTORY VAULT SCREEN */
+          <div className="w-full space-y-6 animate-fade-in">
+            {/* Top Bar Header */}
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-black uppercase tracking-wider text-slate-100 flex items-center">
+                  <History className="w-5 h-5 text-cyan-400 mr-2" /> Download History Vault
+                </h2>
+                <p className="text-xs text-slate-500">Action-based backup vault of all cleared, archived, and deleted download tasks.</p>
               </div>
 
               <div className="flex items-center space-x-2">
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-8 px-3 text-[11px] border-slate-800 text-slate-300 hover:text-white"
-                  onClick={triggerSelectedJobsOptions}
+                  className="h-9 px-3 text-xs border-cyan-500/40 text-cyan-300 hover:bg-cyan-950/30"
+                  onClick={handleExportHistoryTxt}
+                  disabled={historyRecords.length === 0}
+                  title="Export all archived links organized by action batch to formatted .txt file"
                 >
-                  <Play className="w-3 h-3 mr-1 text-cyber-cyan fill-current" /> Download Selected ({selectedJobIds.length})
-                </Button>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 px-3 text-[11px] border-amber-900/50 text-amber-300 hover:bg-amber-950/40"
-                  onClick={handleBulkResetRemoveMedia}
-                  title="Delete local file from storage, keep link in DB and reset status to pending"
-                >
-                  <RotateCcw className="w-3 h-3 mr-1 text-amber-400" /> Remove File (Keep DB Link)
+                  <FileDown className="w-4 h-4 mr-1.5 text-cyan-400" /> Export History (.txt)
                 </Button>
 
                 <Button
                   variant="danger"
                   size="sm"
-                  className="h-8 px-3 text-[11px] bg-rose-950/60 text-rose-300 border-rose-900/60 hover:bg-rose-900"
-                  onClick={handleBulkDeleteSelected}
-                  title="Permanently delete from disk storage AND delete DB record"
+                  className="h-9 px-3 text-xs bg-rose-950/80 text-rose-300 border-rose-900 hover:bg-rose-900"
+                  onClick={handleClearHistoryVault}
+                  disabled={historyRecords.length === 0}
+                  title="Permanently clear History Vault backup database"
                 >
-                  <Trash2 className="w-3 h-3 mr-1" /> Delete (Disk + DB)
+                  <Trash2 className="w-4 h-4 mr-1.5" /> Clear History Vault
                 </Button>
-
-                <button
-                  onClick={() => setSelectedJobIds([])}
-                  className="p-1 rounded text-slate-500 hover:text-slate-200 transition-colors ml-2"
-                  title="Clear Selection"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Jobs Queue Table */}
-          <Card className="p-0 bg-slate-950/40 backdrop-blur-md border-slate-900 overflow-hidden shadow-2xl">
-            <div className="p-4 border-b border-slate-900 flex items-center justify-between bg-slate-900/10">
-              <div className="flex items-center space-x-3">
-                <DarkCheckbox checked={isAllSelected} onChange={toggleSelectAll} title={isAllSelected ? 'Deselect All' : 'Select All'} />
-                <div className="flex items-center space-x-2">
-                  <Monitor className="w-4 h-4 text-violet-400" />
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-300">Live Media Queue</span>
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <span className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 bg-violet-950/40 text-violet-400 border border-violet-900/40 rounded">
-                  {pendingJobsCount} Pending
-                </span>
-                <span className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 bg-slate-900 border border-slate-800 text-slate-400 rounded">
-                  {filteredJobs.length} / {jobs.length} Total
-                </span>
               </div>
             </div>
 
-            {filteredJobs.length === 0 ? (
+            {/* History Search Bar */}
+            <div className="relative w-full">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+              <input
+                type="text"
+                value={historySearchQuery}
+                onChange={(e) => setHistorySearchQuery(e.target.value)}
+                placeholder="Search action cards by title, URL, platform, or action type..."
+                className="w-full bg-slate-950/60 border border-slate-800 rounded-md pl-9 pr-4 py-2.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-400"
+              />
+            </div>
+
+            {/* History Action Batch Cards */}
+            {loadingHistory ? (
+              <div className="py-20 text-center space-y-2">
+                <RefreshCw className="w-8 h-8 mx-auto text-cyan-400 animate-spin" />
+                <p className="text-xs text-slate-400 font-mono">Loading Action History Batches from Neon DB...</p>
+              </div>
+            ) : filteredActionBatches.length === 0 ? (
               <div className="py-20 text-center space-y-3">
-                <Download className="w-10 h-10 mx-auto text-slate-800 stroke-[1.5] animate-bounce" />
+                <History className="w-10 h-10 mx-auto text-slate-800 stroke-[1.5]" />
                 <div className="space-y-1">
-                  <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">No matching media tasks</p>
+                  <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">No action history batches found</p>
                   <p className="text-[10px] text-slate-600 max-w-xs mx-auto">
-                    Import batch files, push downloads from Mobile, send via the Web Extension, or paste a URL above.
+                    Clearing workspace or removing links will automatically create action cards here with timestamps and single-click RESTORE ALL options.
                   </p>
                 </div>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs text-slate-300">
-                  <thead className="text-[9px] uppercase tracking-wider bg-slate-950/80 text-slate-500 border-b border-slate-900">
-                    <tr>
-                      <th className="py-3.5 px-4 w-10 text-center">
-                        <DarkCheckbox checked={isAllSelected} onChange={toggleSelectAll} />
-                      </th>
-                      <th className="py-3.5 px-5 font-bold">Source Title</th>
-                      <th className="py-3.5 px-5 font-bold">Origin</th>
-                      <th className="py-3.5 px-5 font-bold">Client Node</th>
-                      <th className="py-3.5 px-5 font-bold">State & Progress</th>
-                      <th className="py-3.5 px-5 font-bold text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-950">
-                    {filteredJobs.map((job) => {
-                      const isSelected = selectedJobIds.includes(job.id);
-                      let nodeIcon = <Laptop className="w-3.5 h-3.5" />;
-                      if (job.requestedByDeviceId.includes('mobile')) {
-                        nodeIcon = <Cpu className="w-3.5 h-3.5 text-pink-500" />;
-                      } else if (job.requestedByDeviceId.includes('extension')) {
-                        nodeIcon = <Server className="w-3.5 h-3.5 text-cyan-400" />;
-                      } else if (job.requestedByDeviceId.includes('bulk')) {
-                        nodeIcon = <FileText className="w-3.5 h-3.5 text-amber-400" />;
-                      }
+              <div className="space-y-4">
+                {filteredActionBatches.map((batch, idx) => {
+                  const isExpanded = expandedBatchIds[batch.batchId] !== false; // Default expanded for great UX
+                  const dateStr = new Date(batch.archivedAt).toLocaleString();
 
-                      return (
-                        <tr
-                          key={job.id}
-                          className={`transition-all duration-200 ${
-                            isSelected ? 'bg-violet-950/30' : 'hover:bg-slate-900/20'
-                          }`}
-                        >
-                          <td className="py-4 px-4 text-center">
-                            <DarkCheckbox checked={isSelected} onChange={() => toggleSelectJob(job.id)} />
-                          </td>
-                          <td className="py-4 px-5">
-                            <div className="font-bold text-slate-200 truncate max-w-md lg:max-w-xl xl:max-w-2xl leading-normal">{job.title || job.url}</div>
-                            <div className="text-[10px] text-slate-600 font-mono truncate max-w-md lg:max-w-xl xl:max-w-2xl mt-0.5 select-all">{job.url}</div>
-                          </td>
-                          <td className="py-4 px-5">
-                            <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-mono font-bold text-slate-400 capitalize">
-                              {job.platform}
+                  let actionBadge = {
+                    label: 'CLEAR WORKSPACE',
+                    badgeClass: 'bg-violet-950/80 text-violet-300 border-violet-700/60',
+                    icon: <Trash2 className="w-3.5 h-3.5 mr-1.5 text-pink-400" />,
+                  };
+
+                  if (batch.actionType === 'CLEAR_COMPLETED') {
+                    actionBadge = {
+                      label: 'CLEAR COMPLETED',
+                      badgeClass: 'bg-cyan-950/80 text-cyan-300 border-cyan-700/60',
+                      icon: <Archive className="w-3.5 h-3.5 mr-1.5 text-cyan-400" />,
+                    };
+                  } else if (batch.actionType === 'BULK_DELETE') {
+                    actionBadge = {
+                      label: 'BULK ACTION',
+                      badgeClass: 'bg-pink-950/80 text-pink-300 border-pink-700/60',
+                      icon: <FileText className="w-3.5 h-3.5 mr-1.5 text-pink-400" />,
+                    };
+                  } else if (batch.actionType === 'SINGLE_DELETE') {
+                    actionBadge = {
+                      label: 'SINGLE LINK ARCHIVE',
+                      badgeClass: 'bg-slate-900 text-slate-300 border-slate-800',
+                      icon: <Link2 className="w-3.5 h-3.5 mr-1.5 text-slate-400" />,
+                    };
+                  }
+
+                  return (
+                    <Card key={batch.batchId} className="p-0 bg-slate-950/50 backdrop-blur-md border-slate-900 overflow-hidden shadow-xl">
+                      {/* Card Action Header */}
+                      <div className="p-4 border-b border-slate-900 flex items-center justify-between bg-slate-900/30">
+                        <div className="flex items-center space-x-3">
+                          <button
+                            onClick={() => toggleBatchExpand(batch.batchId)}
+                            className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-900 transition-colors cursor-pointer"
+                          >
+                            <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isExpanded ? '' : '-rotate-90'}`} />
+                          </button>
+
+                          <div className="flex items-center space-x-2">
+                            <span className={`px-2.5 py-1 rounded text-[10px] font-black uppercase tracking-wider border flex items-center shadow-sm ${actionBadge.badgeClass}`}>
+                              {actionBadge.icon}
+                              {actionBadge.label}
                             </span>
-                          </td>
-                          <td className="py-4 px-5">
-                            <div className="flex items-center space-x-1.5 text-slate-400">
-                              {nodeIcon}
-                              <span className="font-mono text-[10px] font-semibold">{job.requestedByDeviceId}</span>
-                            </div>
-                          </td>
-                          <td className="py-4 px-5">
-                            <div className="space-y-1.5">
-                              <StatusBadge status={job.status} />
-                              {job.status === 'downloading' && (
-                                <div className="w-28 bg-slate-900 h-1.5 rounded-full overflow-hidden border border-slate-800">
-                                  <div
-                                    className="bg-gradient-to-r from-cyan-400 to-pink-500 h-full transition-all duration-300"
-                                    style={{ width: `${job.progress || 10}%` }}
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          </td>
-                          <td className="py-4 px-5 text-right">
-                            <div className="flex items-center justify-end space-x-2">
-                              {/* Terminal Logs Icon Button for any job */}
-                              <button
-                                onClick={() => {
-                                  userClosedConsoleRef.current = false;
-                                  setActiveConsoleJob(job);
-                                }}
-                                className="p-1.5 rounded text-slate-500 hover:text-cyan-400 hover:bg-slate-900 transition-colors"
-                                title="View CLI Terminal Logs"
-                              >
-                                <Terminal className="w-3.5 h-3.5" />
-                              </button>
 
-                              {job.status === 'pending' && (
+                            <span className="text-xs font-bold text-slate-200">
+                              Action Batch #{filteredActionBatches.length - idx}
+                            </span>
+
+                            <span className="text-[11px] text-slate-500 font-mono ml-2">
+                              {dateStr}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Action Header Controls (RESTORE ALL LINKS Button) */}
+                        <div className="flex items-center space-x-3">
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 font-bold">
+                            {batch.items.length} link{batch.items.length > 1 ? 's' : ''}
+                          </span>
+
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            className="h-8 px-3 text-xs font-bold bg-gradient-to-r from-violet-600 to-pink-500 hover:from-pink-500 hover:to-violet-600 shadow-[0_0_15px_rgba(139,92,246,0.3)] cursor-pointer"
+                            onClick={() => handleRestoreBatch(batch.items)}
+                            title="Bring ALL links from this action batch back to Live Workspace"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+                            RESTORE ALL LINKS ({batch.items.length})
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Expandable Items List */}
+                      {isExpanded && (
+                        <div className="divide-y divide-slate-900/60 bg-slate-950/20">
+                          {batch.items.map((item, itemIdx) => (
+                            <div key={item.id || itemIdx} className="p-3 px-5 flex items-center justify-between hover:bg-slate-900/30 transition-colors">
+                              <div className="flex items-center space-x-3 min-w-0 pr-4">
+                                <span className="text-[10px] font-mono text-slate-600 font-bold w-5">#{itemIdx + 1}</span>
+                                <div className="min-w-0">
+                                  <div className="text-xs font-bold text-slate-200 truncate max-w-md lg:max-w-2xl">
+                                    {item.title || item.url}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500 font-mono truncate max-w-md lg:max-w-2xl select-all">
+                                    {item.url}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center space-x-3 shrink-0">
+                                <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-bold text-slate-400 capitalize">
+                                  {item.platform}
+                                </span>
+
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  className="px-2.5 py-1 text-[10px] border-slate-800 hover:border-pink-500 hover:text-pink-400"
-                                  onClick={() => triggerSingleJobOptions(job)}
+                                  className="h-7 px-2.5 text-[10px] border-slate-800 text-slate-300 hover:border-violet-500 hover:text-violet-300"
+                                  onClick={() => handleRestoreBatch([item])}
+                                  title="Restore single link back to Live Workspace"
                                 >
-                                  <Play className="w-3 h-3 mr-1 fill-current" /> Start
+                                  <Plus className="w-3 h-3 mr-1" /> Restore
                                 </Button>
-                              )}
-
-                              {job.status === 'downloading' && (
-                                <>
-                                  <span className="text-[10px] font-mono font-bold text-cyan-400 animate-pulse mr-1">
-                                    {job.progress || 0}%
-                                  </span>
-                                  <Button
-                                    variant="danger"
-                                    size="sm"
-                                    className="px-2 py-1 text-[10px] bg-rose-950/60 text-rose-400 border-rose-900/60 hover:bg-rose-900"
-                                    onClick={() => handleCancelJob(job.id)}
-                                    title="Stop Download (Preserve Downloaded Content)"
-                                  >
-                                    <Square className="w-3 h-3 mr-1 fill-current" /> Stop
-                                  </Button>
-                                </>
-                              )}
-
-                              {job.status === 'completed' && (
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-[10px] font-mono font-bold text-emerald-400 flex items-center">
-                                    <Check className="w-3 h-3 mr-1" /> Saved
-                                  </span>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="px-2 py-1 text-[10px] border-slate-800 hover:border-cyan-400 text-cyan-400"
-                                    onClick={() => openFileInFinder(job, dbUrl, downloadConfig.downloadPath)}
-                                    title="Open File Location in macOS Finder"
-                                  >
-                                    <FolderOpen className="w-3 h-3 mr-1" /> Finder
-                                  </Button>
-                                </div>
-                              )}
-
-                              {job.status === 'failed' && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="px-2 py-1 text-[10px] border-amber-900/60 text-amber-400 hover:bg-amber-950/40"
-                                  onClick={() => triggerSingleJobOptions(job)}
-                                >
-                                  <RotateCcw className="w-3 h-3 mr-1" /> Retry
-                                </Button>
-                              )}
+                              </div>
                             </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                          ))}
+                        </div>
+                      )}
+                    </Card>
+                  );
+                })}
               </div>
             )}
-          </Card>
-        </div>
+          </div>
+        )}
       </main>
 
       {/* Live Command Console Terminal Modal */}

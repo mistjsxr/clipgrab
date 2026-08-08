@@ -1,4 +1,5 @@
 export * from './schema';
 export * from './client';
 export * from './migrator';
-export { eq } from 'drizzle-orm';
+export { eq, desc, inArray } from 'drizzle-orm';
+export { neon } from '@neondatabase/serverless';
