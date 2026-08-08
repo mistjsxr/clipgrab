@@ -405,10 +405,15 @@ export default function App() {
   };
 
   const handleRestoreBatch = async (batchItems: any[]) => {
+    if (batchItems.length === 0) return;
+    const restoredIds = batchItems.map((item) => item.id);
+
     const success = await restoreBatchToQueue(batchItems, dbUrl);
     if (success) {
-      alert(`Successfully restored ${batchItems.length} link(s) back to Live Workspace!`);
+      setHistoryRecords((prev) => prev.filter((r) => !restoredIds.includes(r.id)));
+      alert(`Successfully restored ${batchItems.length} link(s) to Live Workspace and removed from History Vault!`);
       setActiveTab('workspace');
+      handleFetchHistory();
     } else {
       alert('Failed to restore links to Live Workspace.');
     }

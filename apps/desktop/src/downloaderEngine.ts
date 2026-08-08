@@ -560,7 +560,7 @@ export function groupHistoryByActionBatches(records: any[]): HistoryBatchGroup[]
   );
 }
 
-// RESTORE ENTIRE BATCH OR SINGLE ITEM BACK TO LIVE MEDIA QUEUE
+// RESTORE ENTIRE BATCH OR SINGLE ITEM BACK TO LIVE MEDIA QUEUE & REMOVE FROM HISTORY VAULT
 export async function restoreBatchToQueue(batchItems: any[], dbUrl: string): Promise<boolean> {
   if (batchItems.length === 0) return true;
   try {
@@ -581,7 +581,15 @@ export async function restoreBatchToQueue(batchItems: any[], dbUrl: string): Pro
       };
     });
 
+    // 1. Re-enqueue items back into live media_queue
     await db.insert(mediaQueue).values(queueEntries);
+
+    // 2. Remove restored items from media_history vault (1 single query!)
+    const historyItemIds = batchItems.map((item) => item.id).filter(Boolean);
+    if (historyItemIds.length > 0) {
+      await db.delete(mediaHistory).where(inArray(mediaHistory.id, historyItemIds));
+    }
+
     return true;
   } catch (err) {
     console.error('Failed to restore batch to queue:', err);
