@@ -372,23 +372,23 @@ export async function executeJobDownload(
           ? `${config.downloadPath.replace('~', process.env.HOME || '/Users/mistjs')}/%(title)s.%(ext)s`
           : `${config.downloadPath}/%(title)s.%(ext)s`;
 
-        // Explicitly include --progress along with --newline and --print after_move:filepath
         args = ['--progress', '--newline', '--print', 'after_move:filepath', '-o', outputTemplate];
 
         if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
           args.push('--cookies-from-browser', config.cookiesBrowser);
         }
 
-        if (config.videoCodec && config.videoCodec !== 'auto') {
-          if (config.videoCodec === 'h264') {
-            args.push('-S', 'vcodec:h264,res,acodec');
-          } else if (config.videoCodec === 'h265') {
-            args.push('-S', 'vcodec:hevc,res,acodec');
-          } else if (config.videoCodec === 'av1') {
-            args.push('-S', 'vcodec:av01,res,acodec');
-          } else if (config.videoCodec === 'vp9') {
-            args.push('-S', 'vcodec:vp9,res,acodec');
-          }
+        // Quality selection
+        if (config.quality === '4k') {
+          args.push('-f', 'bestvideo[height<=2160]+bestaudio/best[height<=2160]/best');
+        } else if (config.quality === '1080p') {
+          args.push('-f', 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best');
+        } else if (config.quality === '720p') {
+          args.push('-f', 'bestvideo[height<=720]+bestaudio/best[height<=720]/best');
+        } else if (config.quality === '480p') {
+          args.push('-f', 'bestvideo[height<=480]+bestaudio/best[height<=480]/best');
+        } else {
+          args.push('-f', 'bestvideo+bestaudio/best');
         }
 
         if (config.container === 'mp3' || config.quality === 'audio') {
@@ -397,18 +397,27 @@ export async function executeJobDownload(
             args.push('--audio-quality', config.audioQuality);
           }
         } else {
-          if (config.quality === '4k') {
-            args.push('-f', 'bestvideo[height<=2160]+bestaudio/best[height<=2160]/best');
-          } else if (config.quality === '1080p') {
-            args.push('-f', 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best');
-          } else if (config.quality === '720p') {
-            args.push('-f', 'bestvideo[height<=720]+bestaudio/best[height<=720]/best');
-          } else if (config.quality === '480p') {
-            args.push('-f', 'bestvideo[height<=480]+bestaudio/best[height<=480]/best');
+          // STRICT FFmpeg Container Recoding & Apple-Compatible Codec Transcoding
+          const targetContainer = config.container || 'mp4';
+          args.push('--recode-video', targetContainer);
+
+          let ffmpegVideoCodec = 'libx264';
+          let extraAppleFlags = '';
+
+          if (config.videoCodec === 'h265') {
+            ffmpegVideoCodec = 'libx265';
+            // Apple macOS QuickTime requires FourCC tag hvc1 for H.265 / HEVC MP4 files
+            extraAppleFlags = '-tag:v hvc1 ';
+          } else if (config.videoCodec === 'av1') {
+            ffmpegVideoCodec = 'libsvtav1';
+          } else if (config.videoCodec === 'vp9') {
+            ffmpegVideoCodec = 'libvpx-vp9';
           } else {
-            args.push('-f', 'bestvideo+bestaudio/best');
+            ffmpegVideoCodec = 'libx264';
           }
-          args.push('--merge-output-format', config.container || 'mp4');
+
+          // Force FFmpeg to strictly render the video with Apple QuickTime compatible flags (-tag:v hvc1 for HEVC)
+          args.push('--postprocessor-args', `ffmpeg: ${extraAppleFlags}-c:v ${ffmpegVideoCodec} -preset fast -c:a aac`);
         }
 
         args.push(targetUrl);
@@ -485,7 +494,7 @@ export async function executeJobDownload(
                     .catch(console.error);
                 }
               }
-            } else if (line.includes('[ffmpeg]') || line.includes('[Merger]')) {
+            } else if (line.includes('[ffmpeg]') || line.includes('[Merger]') || line.includes('[VideoConvertor]')) {
               lastProgress = 95;
               if (onProgress) {
                 onProgress(job.id, 95, 'downloading');
