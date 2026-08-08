@@ -1,7 +1,8 @@
 import { Command } from '@tauri-apps/plugin-shell';
+import { invoke } from '@tauri-apps/api/core';
 import { createNeonClient, mediaQueue, eq } from '@clipgrab/db';
 import { MediaJob } from '@clipgrab/types';
-import { cleanMediaUrl } from '@clipgrab/core-downloader';
+import { cleanMediaUrl, extractMediaId } from '@clipgrab/core-downloader';
 
 export interface DownloadConfig {
   downloadPath: string;
@@ -12,6 +13,7 @@ export interface DownloadConfig {
   useGalleryDlForPhotos: boolean;
   toolPreference: 'auto' | 'ytdlp' | 'gallerydl';
   cookiesBrowser: 'none' | 'chrome' | 'safari' | 'firefox' | 'brave' | 'edge';
+  autoUpdateEngine: boolean;
 }
 
 export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
@@ -23,6 +25,7 @@ export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
   useGalleryDlForPhotos: true,
   toolPreference: 'auto',
   cookiesBrowser: 'none',
+  autoUpdateEngine: true,
 };
 
 // Map of active child processes running by jobId
@@ -30,6 +33,127 @@ const activeChildProcesses = new Map<string, any>();
 
 // Standard macOS Homebrew PATH exported for GUI Tauri apps
 const MACOS_PATH_ENV = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH";';
+
+export async function sendSystemNotification(title: string, body: string) {
+  try {
+    let granted = await invoke<boolean>('plugin:notification|is_permission_granted').catch(() => false);
+    if (!granted) {
+      const permission = await invoke<string>('plugin:notification|request_permission').catch(() => 'denied');
+      granted = permission === 'granted';
+    }
+    if (granted) {
+      await invoke('plugin:notification|notify', {
+        options: { title, body }
+      }).catch(console.error);
+    }
+  } catch (err) {
+    console.error('Notification error:', err);
+  }
+}
+
+export async function openFileInFinder(job: MediaJob, dbUrl?: string, configPath?: string): Promise<boolean> {
+  try {
+    let targetPath = job.filePath || configPath || '~/Downloads/ClipGrab';
+    if (targetPath.startsWith('~')) {
+      targetPath = targetPath.replace('~', process.env.HOME || '/Users/mistjs');
+    }
+
+    const downloadFolder = (configPath || '~/Downloads/ClipGrab').startsWith('~')
+      ? (configPath || '~/Downloads/ClipGrab').replace('~', process.env.HOME || '/Users/mistjs')
+      : configPath || '~/Downloads/ClipGrab';
+
+    const mediaId = extractMediaId(job.url) || '';
+
+    // Database-backed Direct Path Finder Script
+    const script = `
+      TARGET="${targetPath.replace(/"/g, '\\"')}"
+      TITLE="${(job.title || '').replace(/"/g, '\\"')}"
+      FOLDER="${downloadFolder.replace(/"/g, '\\"')}"
+      MEDIA_ID="${mediaId.replace(/"/g, '\\"')}"
+
+      # Tier 1: Direct exact file on disk -> Reveal immediately
+      if [ -f "$TARGET" ]; then
+        open -R "$TARGET"
+        echo "$TARGET"
+        exit 0
+      fi
+
+      # Tier 2: Search download folder by Title or Media ID
+      FOUND=""
+      if [ -d "$FOLDER" ]; then
+        if [ -n "$TITLE" ] && [ "$TITLE" != "YOUTUBE Media" ] && [ "$TITLE" != "INSTAGRAM Media" ] && [ "$TITLE" != "TIKTOK Media" ] && [ "$TITLE" != "TWITTER Media" ]; then
+          FOUND=$(find "$FOLDER" -maxdepth 2 -type f 2>/dev/null | grep -F -i "$TITLE" | head -n 1)
+        fi
+
+        if [ -z "$FOUND" ] && [ -n "$MEDIA_ID" ]; then
+          FOUND=$(find "$FOLDER" -maxdepth 2 -type f 2>/dev/null | grep -F -i "$MEDIA_ID" | head -n 1)
+        fi
+
+        if [ -n "$FOUND" ] && [ -f "$FOUND" ]; then
+          open -R "$FOUND"
+          echo "$FOUND"
+          exit 0
+        else
+          open "$FOLDER"
+          exit 0
+        fi
+      fi
+
+      open "${configPath || '~/Downloads'}"
+    `;
+
+    const cmd = Command.create('sh', ['-c', script]);
+    const output = await cmd.execute();
+    const resolvedPath = output.stdout.trim();
+
+    // Backfill DB with the exact resolved path if found & dbUrl provided
+    if (resolvedPath && resolvedPath.startsWith('/') && resolvedPath !== job.filePath && dbUrl) {
+      try {
+        const db = createNeonClient(dbUrl);
+        const filename = resolvedPath.split('/').pop() || '';
+        const cleanTitle = filename.replace(/\.[^/.]+$/, '');
+
+        await db
+          .update(mediaQueue)
+          .set({
+            filePath: resolvedPath,
+            title: cleanTitle || job.title,
+            updatedAt: new Date(),
+          })
+          .where(eq(mediaQueue.id, job.id));
+      } catch (e) {
+        console.error('Failed to backfill DB with resolved path:', e);
+      }
+    }
+
+    return output.code === 0;
+  } catch (err) {
+    console.error('Failed to open file in Finder:', err);
+    return false;
+  }
+}
+
+export async function updateEngineBinaries(
+  jobId: string,
+  onLogOutput?: (jobId: string, type: 'stdout' | 'stderr' | 'info', text: string) => void
+): Promise<boolean> {
+  if (onLogOutput) {
+    onLogOutput(jobId, 'info', '$ yt-dlp -U (Performing pre-flight engine update check...)');
+  }
+  try {
+    const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} yt-dlp -U`]);
+    const output = await cmd.execute();
+    if (onLogOutput && output.stdout) {
+      onLogOutput(jobId, 'stdout', output.stdout.trim());
+    }
+    return true;
+  } catch (err: any) {
+    if (onLogOutput) {
+      onLogOutput(jobId, 'stderr', `[NOTICE] Engine update check skipped: ${err?.message || err}`);
+    }
+    return false;
+  }
+}
 
 export async function checkToolAvailability(toolName: string): Promise<boolean> {
   try {
@@ -66,7 +190,6 @@ export async function detectInstalledBrowsers(): Promise<Array<{ id: string; nam
 }
 
 export function isPhotoUrl(url: string, platform: string): boolean {
-  // Only return true for explicit photo posts, not Instagram /p/ links which are often Reels
   if (platform === 'twitter' && url.includes('/photo/')) {
     return true;
   }
@@ -184,6 +307,11 @@ export async function executeJobDownload(
     console.error('Failed to set downloading status in DB:', err);
   }
 
+  // Optional Pre-flight Engine Update
+  if (config.autoUpdateEngine !== false) {
+    await updateEngineBinaries(job.id, onLogOutput);
+  }
+
   // Tool Selection & Fallback Logic
   let useGalleryDl = false;
   if (config.toolPreference === 'gallerydl') {
@@ -222,6 +350,7 @@ export async function executeJobDownload(
     return new Promise((resolve) => {
       let args: string[] = [];
       let toolBinary = 'yt-dlp';
+      let detectedFilePath = '';
 
       const currentUseGalleryDl = forceYtDlp ? false : useGalleryDl;
 
@@ -230,7 +359,6 @@ export async function executeJobDownload(
         const outputDir = config.downloadPath.startsWith('~')
           ? config.downloadPath.replace('~', process.env.HOME || '/Users/mistjs')
           : config.downloadPath;
-        // Pass -o path={} to force flat directory saving without nested subfolders
         args = ['-d', outputDir, '-o', 'path={}'];
 
         if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
@@ -244,13 +372,12 @@ export async function executeJobDownload(
           ? `${config.downloadPath.replace('~', process.env.HOME || '/Users/mistjs')}/%(title)s.%(ext)s`
           : `${config.downloadPath}/%(title)s.%(ext)s`;
 
-        args = ['--newline', '-o', outputTemplate];
+        args = ['--newline', '--print', 'after_move:filepath', '-o', outputTemplate];
 
         if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
           args.push('--cookies-from-browser', config.cookiesBrowser);
         }
 
-        // Codec preference sorting (-S)
         if (config.videoCodec && config.videoCodec !== 'auto') {
           if (config.videoCodec === 'h264') {
             args.push('-S', 'vcodec:h264,res,acodec');
@@ -263,7 +390,6 @@ export async function executeJobDownload(
           }
         }
 
-        // Quality & Format rules
         if (config.container === 'mp3' || config.quality === 'audio') {
           args.push('-x', '--audio-format', 'mp3');
           if (config.audioQuality !== 'best') {
@@ -301,6 +427,20 @@ export async function executeJobDownload(
             onLogOutput(job.id, 'stdout', line);
           }
 
+          // Parse exact output destination path from stdout for yt-dlp & gallery-dl
+          const destMatch = line.match(/(?:Destination:|Merging formats into|has already been downloaded)\s+["']?([^"'\r\n]+)/i);
+          if (destMatch && destMatch[1]) {
+            const candidate = destMatch[1].trim();
+            if (!candidate.endsWith('.tmp') && !candidate.endsWith('.part')) {
+              detectedFilePath = candidate;
+            }
+          } else {
+            const trimmedLine = line.trim();
+            if (trimmedLine.startsWith('/') && !trimmedLine.endsWith('.tmp') && !trimmedLine.endsWith('.part')) {
+              detectedFilePath = trimmedLine;
+            }
+          }
+
           const progressMatch = line.match(/\[download\]\s+(\d+(?:\.\d+)?)%/);
           if (progressMatch) {
             const parsedProgress = Math.min(Math.round(parseFloat(progressMatch[1])), 99);
@@ -330,14 +470,8 @@ export async function executeJobDownload(
               onLogOutput(job.id, 'info', `✔ Process completed successfully (exit code 0)`);
             }
 
-            await db
-              .update(mediaQueue)
-              .set({ status: 'completed', progress: 100, updatedAt: new Date() })
-              .where(eq(mediaQueue.id, job.id))
-              .catch(console.error);
-
-            if (onProgress) onProgress(job.id, 100, 'completed');
-            resolve({ success: true, filePath: config.downloadPath });
+            const targetFilePath = detectedFilePath || config.downloadPath;
+            resolve({ success: true, filePath: targetFilePath });
           } else {
             const errorMsg = `Process exited with code ${data.code}`;
             resolve({ success: false, error: errorMsg });
@@ -370,14 +504,33 @@ export async function executeJobDownload(
     result = await runSingleAttempt(true);
   }
 
-  // Update DB on final outcome
+  // Update DB on final outcome with exact file path string
   if (result.success) {
+    const finalFilePath = result.filePath || config.downloadPath;
+    let extractedTitle = job.title;
+
+    if (finalFilePath && finalFilePath !== config.downloadPath) {
+      const filename = finalFilePath.split('/').pop() || '';
+      const cleanTitle = filename.replace(/\.[^/.]+$/, '');
+      if (cleanTitle) {
+        extractedTitle = cleanTitle;
+      }
+    }
+
     await db
       .update(mediaQueue)
-      .set({ status: 'completed', progress: 100, updatedAt: new Date() })
+      .set({
+        status: 'completed',
+        progress: 100,
+        title: extractedTitle || job.title,
+        filePath: finalFilePath,
+        updatedAt: new Date()
+      })
       .where(eq(mediaQueue.id, job.id))
       .catch(console.error);
+
     if (onProgress) onProgress(job.id, 100, 'completed');
+    sendSystemNotification('ClipGrab Download Complete', `Media downloaded successfully: ${extractedTitle || job.url}`);
   } else {
     const finalErr = result.error || 'Execution failed';
     if (onLogOutput) {
@@ -389,6 +542,7 @@ export async function executeJobDownload(
       .where(eq(mediaQueue.id, job.id))
       .catch(console.error);
     if (onProgress) onProgress(job.id, 0, 'failed');
+    sendSystemNotification('ClipGrab Download Failed', `Download encountered an error: ${finalErr}`);
   }
 
   return result;

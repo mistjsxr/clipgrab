@@ -7,6 +7,8 @@
     "dialog:default",
     "dialog:allow-open",
     "clipboard-manager:default",
+    "notification:default",
+    "notification:allow-notify",
     "shell:allow-open",
     {
       "identifier": "shell:allow-execute",
@@ -24,6 +26,11 @@
         {
           "name": "bash",
           "cmd": "bash",
+          "args": true
+        },
+        {
+          "name": "open",
+          "cmd": "open",
           "args": true
         },
         {
@@ -54,6 +61,11 @@
         {
           "name": "bash",
           "cmd": "bash",
+          "args": true
+        },
+        {
+          "name": "open",
+          "cmd": "open",
           "args": true
         },
         {

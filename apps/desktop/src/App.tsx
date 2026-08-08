@@ -3,10 +3,12 @@ import { Button, Card, Input, QRCodeView, StatusBadge } from '@clipgrab/ui';
 import { createNeonClient, verifyNeonConnection, initializeDatabaseTables, mediaQueue, eq } from '@clipgrab/db';
 import { isValidMediaUrl, createMediaJobPayload, cleanMediaUrl } from '@clipgrab/core-downloader';
 import { MediaJob, PairingPayload } from '@clipgrab/types';
-import { Download, QrCode, Database, RefreshCw, Copy, Check, Plus, Monitor, ShieldCheck, Link2, Server, Trash2, Cpu, Laptop, Play, Settings2, FolderOpen, Ban, RotateCcw, Terminal, Sparkles, CheckSquare, Square, X } from 'lucide-react';
+import { readText } from '@tauri-apps/plugin-clipboard-manager';
+import { Download, QrCode, Database, RefreshCw, Copy, Check, Plus, Monitor, ShieldCheck, Link2, Server, Trash2, Cpu, Laptop, Play, Settings2, FolderOpen, Ban, RotateCcw, Terminal, Sparkles, CheckSquare, Square, X, FileText, Search, Filter, Clipboard, ExternalLink } from 'lucide-react';
 import { DownloadSettingsModal } from './components/DownloadSettingsModal';
 import { CommandConsoleModal } from './components/CommandConsoleModal';
-import { DownloadConfig, DEFAULT_DOWNLOAD_CONFIG, executeJobDownload, cancelJobDownload, deleteJobAndFile, removeDownloadedFileAndResetJob } from './downloaderEngine';
+import { BatchImportModal } from './components/BatchImportModal';
+import { DownloadConfig, DEFAULT_DOWNLOAD_CONFIG, executeJobDownload, cancelJobDownload, deleteJobAndFile, removeDownloadedFileAndResetJob, openFileInFinder } from './downloaderEngine';
 
 const LOCAL_STORAGE_DB_KEY = 'clipgrab_db_url';
 const LOCAL_STORAGE_PASS_KEY = 'clipgrab_pass_id';
@@ -40,8 +42,18 @@ export default function App() {
   const [urlInput, setUrlInput] = useState('');
   const [showPairingModal, setShowPairingModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showBatchImportModal, setShowBatchImportModal] = useState(false);
   const [pairingPayloadBase64, setPairingPayloadBase64] = useState('');
   const [copiedPairingKey, setCopiedPairingKey] = useState(false);
+
+  // Clipboard Auto-Detect State
+  const [clipboardDetectedUrl, setClipboardDetectedUrl] = useState('');
+  const [showClipboardBanner, setShowClipboardBanner] = useState(false);
+
+  // Queue Filtering & Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'downloading' | 'completed' | 'failed'>('all');
+  const [platformFilter, setPlatformFilter] = useState<'all' | 'youtube' | 'instagram' | 'tiktok' | 'twitter'>('all');
 
   // Gmail-style Selection state
   const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
@@ -107,6 +119,27 @@ export default function App() {
     return () => clearInterval(interval);
   }, [isConfigured, dbUrl]);
 
+  // Clipboard Auto-Detect Listener on Window Focus
+  useEffect(() => {
+    if (!isConfigured) return;
+
+    const checkClipboard = async () => {
+      try {
+        const text = await readText();
+        if (text && isValidMediaUrl(text) && text !== clipboardDetectedUrl) {
+          setClipboardDetectedUrl(text);
+          setShowClipboardBanner(true);
+        }
+      } catch (err) {
+        // Clipboard read permission ignored
+      }
+    };
+
+    window.addEventListener('focus', checkClipboard);
+    checkClipboard();
+    return () => window.removeEventListener('focus', checkClipboard);
+  }, [isConfigured, clipboardDetectedUrl]);
+
   const generatePairingPayload = (url: string, pass: string) => {
     const payload: PairingPayload = {
       databaseUrl: url,
@@ -160,16 +193,17 @@ export default function App() {
     }
   };
 
-  const handleManualEnqueue = async () => {
-    if (!urlInput.trim()) return;
-    if (!isValidMediaUrl(urlInput)) {
+  const handleManualEnqueue = async (urlToEnqueue?: string) => {
+    const targetUrl = urlToEnqueue || urlInput;
+    if (!targetUrl.trim()) return;
+    if (!isValidMediaUrl(targetUrl)) {
       alert('Please enter a valid supported media URL (YouTube, Twitter/X, TikTok, Instagram, Direct MP4/MP3).');
       return;
     }
 
     try {
       const client = createNeonClient(dbUrl);
-      const payload = createMediaJobPayload(urlInput, 'desktop_master');
+      const payload = createMediaJobPayload(targetUrl, 'desktop_master');
       
       await client.insert(mediaQueue).values({
         id: payload.id,
@@ -181,9 +215,36 @@ export default function App() {
         progress: 0,
       });
 
-      setUrlInput('');
+      if (!urlToEnqueue) setUrlInput('');
+      setShowClipboardBanner(false);
     } catch (err: any) {
       alert('Failed to enqueue task: ' + err?.message);
+    }
+  };
+
+  // Confirm Batch File Import (.txt / .json)
+  const handleConfirmBatchImport = async (urls: string[]) => {
+    if (urls.length === 0 || !dbUrl) return;
+
+    try {
+      const client = createNeonClient(dbUrl);
+      const insertValues = urls.map((u) => {
+        const payload = createMediaJobPayload(u, 'bulk_file_import');
+        return {
+          id: payload.id,
+          url: payload.url,
+          title: payload.title,
+          platform: payload.platform,
+          status: payload.status,
+          requestedByDeviceId: 'bulk_file_import',
+          progress: 0,
+        };
+      });
+
+      await client.insert(mediaQueue).values(insertValues);
+      alert(`Enqueued ${urls.length} media links from batch file!`);
+    } catch (err: any) {
+      alert('Failed to import batch links: ' + err?.message);
     }
   };
 
@@ -194,14 +255,27 @@ export default function App() {
     }));
   };
 
+  // Queue Filtering Logic
+  const filteredJobs = jobs.filter((j) => {
+    const matchesSearch =
+      searchQuery.trim() === '' ||
+      (j.title && j.title.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      j.url.toLowerCase().includes(searchQuery.toLowerCase());
+
+    const matchesStatus = statusFilter === 'all' || j.status === statusFilter;
+    const matchesPlatform = platformFilter === 'all' || j.platform === platformFilter;
+
+    return matchesSearch && matchesStatus && matchesPlatform;
+  });
+
   // Gmail-style Selection Handlers
-  const isAllSelected = jobs.length > 0 && selectedJobIds.length === jobs.length;
+  const isAllSelected = filteredJobs.length > 0 && selectedJobIds.length === filteredJobs.length;
   
   const toggleSelectAll = () => {
     if (isAllSelected) {
       setSelectedJobIds([]);
     } else {
-      setSelectedJobIds(jobs.map((j) => j.id));
+      setSelectedJobIds(filteredJobs.map((j) => j.id));
     }
   };
 
@@ -520,8 +594,29 @@ export default function App() {
       </aside>
 
       {/* Main Workspace */}
-      <main className="flex-1 p-8 overflow-y-auto z-10">
-        <div className="max-w-4xl mx-auto space-y-6">
+      <main className="flex-1 p-6 md:p-8 overflow-y-auto z-10 w-full">
+        <div className="w-full space-y-6">
+          {/* Clipboard Auto-Detect Banner */}
+          {showClipboardBanner && (
+            <div className="p-3 bg-gradient-to-r from-violet-900/80 to-pink-900/80 border border-violet-500/50 rounded-lg backdrop-blur-md flex items-center justify-between shadow-[0_0_20px_rgba(139,92,246,0.25)] animate-fade-in">
+              <div className="flex items-center space-x-3 text-xs truncate mr-2">
+                <Clipboard className="w-4 h-4 text-cyan-400 flex-shrink-0" />
+                <div className="truncate">
+                  <span className="font-bold text-white uppercase text-[10px] tracking-wider block">Media Link Detected in Clipboard</span>
+                  <span className="text-slate-300 font-mono text-[10px] truncate block select-all">{clipboardDetectedUrl}</span>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2 shrink-0">
+                <Button variant="primary" size="sm" className="h-8 px-3 text-[11px] font-bold" onClick={() => handleManualEnqueue(clipboardDetectedUrl)}>
+                  <Plus className="w-3.5 h-3.5 mr-1" /> Quick Enqueue
+                </Button>
+                <button onClick={() => setShowClipboardBanner(false)} className="p-1 rounded text-slate-400 hover:text-white">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Top Bar / Queue Header */}
           <div className="flex items-center justify-between">
             <div>
@@ -530,7 +625,17 @@ export default function App() {
             </div>
             
             {/* Top Right Controls */}
-            <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 px-3 text-xs border-violet-500/30 text-violet-300 hover:bg-violet-950/20"
+                onClick={() => setShowBatchImportModal(true)}
+              >
+                <FileText className="w-3.5 h-3.5 mr-1.5 text-pink-400" />
+                Bulk Batch Import
+              </Button>
+
               <Button
                 variant="outline"
                 size="sm"
@@ -587,11 +692,53 @@ export default function App() {
                 placeholder="Paste YouTube, X/Twitter, TikTok, or Direct Media URL..."
                 className="flex-1 bg-slate-950 border border-slate-900 rounded-md px-4 py-2.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-pink-500 transition-all"
               />
-              <Button variant="primary" className="py-2.5 px-4 font-bold text-xs" onClick={handleManualEnqueue}>
+              <Button variant="primary" className="py-2.5 px-4 font-bold text-xs" onClick={() => handleManualEnqueue()}>
                 <Plus className="w-3.5 h-3.5 mr-1.5" /> Enqueue
               </Button>
             </div>
           </Card>
+
+          {/* Queue Filtering & Real-Time Search Bar */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-950/60 p-3 rounded-lg border border-slate-900">
+            {/* Search Input */}
+            <div className="relative flex-1 w-full">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search queue by title or URL..."
+                className="w-full bg-slate-900/80 border border-slate-800 rounded-md pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan-400"
+              />
+            </div>
+
+            {/* Filter Pills */}
+            <div className="flex items-center space-x-2 text-[10px] font-mono">
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as any)}
+                className="bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-300 focus:outline-none"
+              >
+                <option value="all">Status: All</option>
+                <option value="pending">Pending</option>
+                <option value="downloading">Downloading</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+              </select>
+
+              <select
+                value={platformFilter}
+                onChange={(e) => setPlatformFilter(e.target.value as any)}
+                className="bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-300 focus:outline-none"
+              >
+                <option value="all">Platform: All</option>
+                <option value="youtube">YouTube</option>
+                <option value="instagram">Instagram</option>
+                <option value="tiktok">TikTok</option>
+                <option value="twitter">Twitter / X</option>
+              </select>
+            </div>
+          </div>
 
           {/* Gmail-Style Multi-Selection Action Bar (Appears when >= 1 items selected) */}
           {selectedJobIds.length > 0 && (
@@ -660,18 +807,18 @@ export default function App() {
                   {pendingJobsCount} Pending
                 </span>
                 <span className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 bg-slate-900 border border-slate-800 text-slate-400 rounded">
-                  {jobs.length} Total
+                  {filteredJobs.length} / {jobs.length} Total
                 </span>
               </div>
             </div>
 
-            {jobs.length === 0 ? (
+            {filteredJobs.length === 0 ? (
               <div className="py-20 text-center space-y-3">
                 <Download className="w-10 h-10 mx-auto text-slate-800 stroke-[1.5] animate-bounce" />
                 <div className="space-y-1">
-                  <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">No active media tasks</p>
+                  <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">No matching media tasks</p>
                   <p className="text-[10px] text-slate-600 max-w-xs mx-auto">
-                    Push downloads from Mobile, send via the Web Extension, or paste a URL above.
+                    Import batch files, push downloads from Mobile, send via the Web Extension, or paste a URL above.
                   </p>
                 </div>
               </div>
@@ -691,13 +838,15 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-950">
-                    {jobs.map((job) => {
+                    {filteredJobs.map((job) => {
                       const isSelected = selectedJobIds.includes(job.id);
                       let nodeIcon = <Laptop className="w-3.5 h-3.5" />;
                       if (job.requestedByDeviceId.includes('mobile')) {
                         nodeIcon = <Cpu className="w-3.5 h-3.5 text-pink-500" />;
                       } else if (job.requestedByDeviceId.includes('extension')) {
                         nodeIcon = <Server className="w-3.5 h-3.5 text-cyan-400" />;
+                      } else if (job.requestedByDeviceId.includes('bulk')) {
+                        nodeIcon = <FileText className="w-3.5 h-3.5 text-amber-400" />;
                       }
 
                       return (
@@ -711,8 +860,8 @@ export default function App() {
                             <DarkCheckbox checked={isSelected} onChange={() => toggleSelectJob(job.id)} />
                           </td>
                           <td className="py-4 px-5">
-                            <div className="font-bold text-slate-200 truncate max-w-xs leading-normal">{job.title || job.url}</div>
-                            <div className="text-[10px] text-slate-600 font-mono truncate max-w-xs mt-0.5 select-all">{job.url}</div>
+                            <div className="font-bold text-slate-200 truncate max-w-md lg:max-w-xl xl:max-w-2xl leading-normal">{job.title || job.url}</div>
+                            <div className="text-[10px] text-slate-600 font-mono truncate max-w-md lg:max-w-xl xl:max-w-2xl mt-0.5 select-all">{job.url}</div>
                           </td>
                           <td className="py-4 px-5">
                             <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-mono font-bold text-slate-400 capitalize">
@@ -778,9 +927,20 @@ export default function App() {
                               )}
 
                               {job.status === 'completed' && (
-                                <span className="text-[10px] font-mono font-bold text-emerald-400 flex items-center mr-1">
-                                  <Check className="w-3 h-3 mr-1" /> Saved
-                                </span>
+                                <div className="flex items-center space-x-2">
+                                  <span className="text-[10px] font-mono font-bold text-emerald-400 flex items-center">
+                                    <Check className="w-3 h-3 mr-1" /> Saved
+                                  </span>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="px-2 py-1 text-[10px] border-slate-800 hover:border-cyan-400 text-cyan-400"
+                                    onClick={() => openFileInFinder(job, dbUrl, downloadConfig.downloadPath)}
+                                    title="Open File Location in macOS Finder"
+                                  >
+                                    <FolderOpen className="w-3 h-3 mr-1" /> Finder
+                                  </Button>
+                                </div>
                               )}
 
                               {job.status === 'failed' && (
@@ -831,6 +991,13 @@ export default function App() {
         onStartDownload={handleConfirmedDownload}
         targetCount={targetDownloadJobs.length > 0 ? targetDownloadJobs.length : pendingJobsCount}
         title={targetDownloadJobs.length === 1 ? 'Configure Single Download' : 'Configure Batch Download'}
+      />
+
+      {/* Bulk Batch Import Modal */}
+      <BatchImportModal
+        isOpen={showBatchImportModal}
+        onClose={() => setShowBatchImportModal(false)}
+        onConfirmImport={handleConfirmBatchImport}
       />
 
       {/* QR Code & Pairing Modal */}

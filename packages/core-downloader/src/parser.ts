@@ -15,6 +15,46 @@ export function cleanMediaUrl(rawUrl: string): string {
   }
 }
 
+export function parseBatchFileContent(content: string): string[] {
+  const urls: string[] = [];
+
+  // Attempt JSON parsing if file contains JSON array or object
+  try {
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed)) {
+      parsed.forEach((item) => {
+        const candidate = typeof item === 'string' ? item : item?.url || item?.link;
+        if (typeof candidate === 'string' && isValidMediaUrl(candidate)) {
+          urls.push(cleanMediaUrl(candidate));
+        }
+      });
+      if (urls.length > 0) return Array.from(new Set(urls));
+    } else if (typeof parsed === 'object' && parsed !== null) {
+      Object.values(parsed).forEach((val) => {
+        if (typeof val === 'string' && isValidMediaUrl(val)) {
+          urls.push(cleanMediaUrl(val));
+        }
+      });
+      if (urls.length > 0) return Array.from(new Set(urls));
+    }
+  } catch {
+    // Plain text / regex fallback
+  }
+
+  // Regex extract all http/https URLs from text
+  const urlRegex = /(https?:\/\/[^\s"'<>]+)/gi;
+  const matches = content.match(urlRegex) || [];
+
+  matches.forEach((m) => {
+    const cleaned = cleanMediaUrl(m);
+    if (isValidMediaUrl(cleaned)) {
+      urls.push(cleaned);
+    }
+  });
+
+  return Array.from(new Set(urls));
+}
+
 export function detectPlatform(url: string): MediaJob['platform'] {
   const clean = cleanMediaUrl(url);
   if (/youtube\.com|youtu\.be/i.test(clean)) return 'youtube';
