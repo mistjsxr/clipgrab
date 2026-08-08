@@ -55,6 +55,10 @@ export default function App() {
   const [historySearchQuery, setHistorySearchQuery] = useState('');
   const [expandedBatchIds, setExpandedBatchIds] = useState<Record<string, boolean>>({});
 
+  // UI Dropdown Menus state
+  const [showCleanMenu, setShowCleanMenu] = useState(false);
+  const [showSelectionStorageMenu, setShowSelectionStorageMenu] = useState(false);
+
   // Clipboard Auto-Detect State
   const [clipboardDetectedUrl, setClipboardDetectedUrl] = useState('');
   const [showClipboardBanner, setShowClipboardBanner] = useState(false);
@@ -513,6 +517,23 @@ export default function App() {
       await removeDownloadedFileAndResetJob(job, dbUrl);
     }
     setSelectedJobIds([]);
+  };
+
+  // Archive selected subset of jobs to History Vault
+  const handleArchiveSelectedToVault = async () => {
+    const selectedJobs = jobs.filter((j) => selectedJobIds.includes(j.id));
+    if (selectedJobs.length === 0) return;
+
+    if (
+      confirm(
+        `Archive ${selectedJobs.length} selected link(s) to History Vault and clear them from workspace?\n\n✔ Links will be safely backed up into your History Vault with timestamps.\n✔ Downloaded local files on disk will NOT be deleted.`
+      )
+    ) {
+      setJobs((prev) => prev.filter((j) => !selectedJobIds.includes(j.id)));
+      await archiveAndClearSubsetJobs(selectedJobs, dbUrl, 'BULK_DELETE');
+      setSelectedJobIds([]);
+      handleFetchHistory();
+    }
   };
 
   // ARCHIVE & CLEAR COMPLETED JOBS (Preserves local media files on disk, archives links in DB History Vault)
@@ -1010,43 +1031,67 @@ export default function App() {
                   onClick={() => setShowBatchImportModal(true)}
                 >
                   <FileText className="w-3.5 h-3.5 mr-1.5 text-pink-400" />
-                  Bulk Batch Import
+                  Bulk Import
                 </Button>
 
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-9 px-3 text-xs border-violet-500/40 text-violet-300 hover:bg-violet-950/30 disabled:opacity-40"
-                  onClick={handleClearCompleted}
-                  disabled={completedJobsCount === 0}
-                  title="Archive completed tasks to History Vault & clear workspace (local files preserved)"
-                >
-                  <Archive className="w-3.5 h-3.5 mr-1.5 text-violet-400" />
-                  Clear Completed ({completedJobsCount})
-                </Button>
+                {/* Clean Workspace Actions Dropdown */}
+                <div className="relative">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9 px-3 text-xs border-violet-500/40 text-violet-300 hover:bg-violet-950/30"
+                    onClick={() => setShowCleanMenu((prev) => !prev)}
+                  >
+                    <Archive className="w-3.5 h-3.5 mr-1.5 text-violet-400" />
+                    Clean ▾
+                  </Button>
 
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-9 px-3 text-xs border-pink-500/40 text-pink-300 hover:bg-pink-950/30 disabled:opacity-40"
-                  onClick={handleClearAllWorkspace}
-                  disabled={jobs.length === 0}
-                  title="Archive ALL queue links to History Vault & start fresh batch (local files preserved)"
-                >
-                  <Trash2 className="w-3.5 h-3.5 mr-1.5 text-pink-400" />
-                  Clear Workspace ({jobs.length})
-                </Button>
+                  {showCleanMenu && (
+                    <div className="absolute right-0 mt-1.5 w-56 bg-slate-900 border border-slate-800 rounded-lg shadow-2xl p-1.5 z-50 space-y-1 animate-fade-in">
+                      <button
+                        onClick={() => {
+                          setShowCleanMenu(false);
+                          handleClearCompleted();
+                        }}
+                        disabled={completedJobsCount === 0}
+                        className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800/60 rounded-md disabled:opacity-40 transition-colors text-left cursor-pointer"
+                      >
+                        <div className="flex items-center space-x-2">
+                          <Archive className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>Clear Completed Tasks</span>
+                        </div>
+                        <span className="text-[10px] font-mono font-bold text-slate-500">({completedJobsCount})</span>
+                      </button>
 
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-9 px-3 text-xs border-amber-500/30 text-amber-300 hover:bg-amber-950/20 disabled:opacity-40"
-                  onClick={handleOptimizeQueueUrls}
-                  disabled={unoptimizedCount === 0}
-                >
-                  <Sparkles className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
-                  Optimize URLs ({unoptimizedCount})
-                </Button>
+                      <button
+                        onClick={() => {
+                          setShowCleanMenu(false);
+                          handleClearAllWorkspace();
+                        }}
+                        disabled={jobs.length === 0}
+                        className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-rose-300 hover:bg-rose-950/40 rounded-md disabled:opacity-40 transition-colors text-left cursor-pointer"
+                      >
+                        <div className="flex items-center space-x-2">
+                          <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                          <span>Clear Entire Workspace</span>
+                        </div>
+                        <span className="text-[10px] font-mono font-bold text-rose-500">({jobs.length})</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {unoptimizedCount > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9 px-3 text-xs border-amber-500/30 text-amber-300 hover:bg-amber-950/20"
+                    onClick={handleOptimizeQueueUrls}
+                  >
+                    <Sparkles className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
+                    Optimize URLs ({unoptimizedCount})
+                  </Button>
+                )}
 
                 <Button
                   variant="outline"
@@ -1057,9 +1102,10 @@ export default function App() {
                     setShowSettingsModal(true);
                   }}
                 >
-                  <Settings2 className="w-4 h-4 mr-1.5" /> Engine Options
+                  <Settings2 className="w-4 h-4 mr-1.5" /> Options
                 </Button>
 
+                {/* Dynamic Morphing Primary CTA Button */}
                 {isDownloadingBatch ? (
                   <div className="flex items-center space-x-2">
                     <Button
@@ -1076,7 +1122,7 @@ export default function App() {
                       title="Click to view live CLI Terminal Console"
                     >
                       <RefreshCw className="w-4 h-4 animate-spin mr-1.5" />
-                      Downloading... (View CLI)
+                      Downloading... (CLI)
                     </Button>
 
                     <Button
@@ -1084,17 +1130,27 @@ export default function App() {
                       size="sm"
                       className="h-9 px-3 text-xs font-bold uppercase tracking-wider bg-rose-950/80 text-rose-300 border-rose-800 hover:bg-rose-900 shadow-[0_0_15px_rgba(225,29,72,0.3)]"
                       onClick={handleStopAllDownloads}
-                      title="Stop & Terminate All Active Downloads (Preserve Content)"
+                      title="Stop & Terminate All Active Downloads"
                     >
                       <Square className="w-3.5 h-3.5 mr-1.5 fill-current" />
                       Stop Batch
                     </Button>
                   </div>
+                ) : selectedJobIds.length > 0 ? (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-cyan-500 to-violet-600 hover:from-violet-600 hover:to-cyan-500 shadow-[0_0_20px_rgba(6,182,212,0.4)] animate-pulse cursor-pointer"
+                    onClick={triggerSelectedJobsOptions}
+                  >
+                    <Play className="w-4 h-4 mr-1.5 fill-current" />
+                    Download Selected ({selectedJobIds.length})
+                  </Button>
                 ) : (
                   <Button
                     variant="primary"
                     size="sm"
-                    className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-violet-600 to-pink-500 hover:from-pink-500 hover:to-violet-600 disabled:opacity-50"
+                    className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-violet-600 to-pink-500 hover:from-pink-500 hover:to-violet-600 disabled:opacity-50 cursor-pointer"
                     onClick={triggerBatchJobOptions}
                     disabled={pendingJobsCount === 0 && downloadingJobsCount === 0}
                   >
@@ -1167,9 +1223,9 @@ export default function App() {
               </div>
             </div>
 
-            {/* Gmail-Style Multi-Selection Action Bar (Appears when >= 1 items selected) */}
+            {/* Contextual Multi-Selection Action Bar */}
             {selectedJobIds.length > 0 && (
-              <div className="p-3 bg-violet-950/80 border border-violet-500/50 rounded-lg backdrop-blur-md flex items-center justify-between shadow-[0_0_25px_rgba(139,92,246,0.2)] animate-fade-in">
+              <div className="p-3 bg-violet-950/80 border border-violet-500/50 rounded-lg backdrop-blur-md flex items-center justify-between shadow-[0_0_25px_rgba(139,92,246,0.25)] animate-fade-in">
                 <div className="flex items-center space-x-3 text-xs font-mono text-violet-200">
                   <div className="flex items-center space-x-2">
                     <DarkCheckbox checked={isAllSelected} onChange={toggleSelectAll} title="Select All / Deselect All" />
@@ -1179,37 +1235,71 @@ export default function App() {
 
                 <div className="flex items-center space-x-2">
                   <Button
-                    variant="outline"
+                    variant="primary"
                     size="sm"
-                    className="h-8 px-3 text-[11px] border-slate-800 text-slate-300 hover:text-white"
+                    className="h-8 px-3 text-[11px] bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-violet-600 hover:to-cyan-600 text-white font-bold cursor-pointer"
                     onClick={triggerSelectedJobsOptions}
                   >
-                    <Play className="w-3 h-3 mr-1 text-cyber-cyan fill-current" /> Download Selected ({selectedJobIds.length})
+                    <Play className="w-3 h-3 mr-1 fill-current" /> Download Selected ({selectedJobIds.length})
                   </Button>
+
+                  {/* Local Storage Actions Menu */}
+                  <div className="relative">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-3 text-[11px] border-amber-900/50 text-amber-300 hover:bg-amber-950/40 cursor-pointer"
+                      onClick={() => setShowSelectionStorageMenu((prev) => !prev)}
+                    >
+                      <FolderOpen className="w-3 h-3 mr-1 text-amber-400" /> Local Storage ▾
+                    </Button>
+
+                    {showSelectionStorageMenu && (
+                      <div className="absolute right-0 mt-1.5 w-64 bg-slate-900 border border-slate-800 rounded-lg shadow-2xl p-1.5 z-50 space-y-1 animate-fade-in">
+                        <button
+                          onClick={() => {
+                            setShowSelectionStorageMenu(false);
+                            handleBulkResetRemoveMedia();
+                          }}
+                          className="w-full flex items-center space-x-2 px-3 py-2 text-xs font-medium text-amber-300 hover:bg-amber-950/50 rounded-md transition-colors text-left cursor-pointer"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <div>
+                            <div className="font-bold">Remove Local File (Keep Link)</div>
+                            <div className="text-[9px] text-slate-400">Deletes disk file, keeps link pending in DB</div>
+                          </div>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setShowSelectionStorageMenu(false);
+                            handleBulkDeleteSelected();
+                          }}
+                          className="w-full flex items-center space-x-2 px-3 py-2 text-xs font-medium text-rose-300 hover:bg-rose-950/50 rounded-md transition-colors text-left cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                          <div>
+                            <div className="font-bold">Delete File & DB Record</div>
+                            <div className="text-[9px] text-slate-400">Deletes disk file and archives DB record</div>
+                          </div>
+                        </button>
+                      </div>
+                    )}
+                  </div>
 
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 px-3 text-[11px] border-amber-900/50 text-amber-300 hover:bg-amber-950/40"
-                    onClick={handleBulkResetRemoveMedia}
-                    title="Delete local file from storage, keep link in DB and reset status to pending"
+                    className="h-8 px-3 text-[11px] border-violet-500/40 text-violet-300 hover:bg-violet-950/40 cursor-pointer"
+                    onClick={handleArchiveSelectedToVault}
+                    title="Archive selected links into History Vault & remove from active workspace"
                   >
-                    <RotateCcw className="w-3 h-3 mr-1 text-amber-400" /> Remove File (Keep DB Link)
-                  </Button>
-
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    className="h-8 px-3 text-[11px] bg-rose-950/60 text-rose-300 border-rose-900/60 hover:bg-rose-900"
-                    onClick={handleBulkDeleteSelected}
-                    title="Permanently delete from disk storage AND delete DB record"
-                  >
-                    <Trash2 className="w-3 h-3 mr-1" /> Delete (Disk + DB)
+                    <Archive className="w-3 h-3 mr-1 text-violet-400" /> Archive to Vault
                   </Button>
 
                   <button
                     onClick={() => setSelectedJobIds([])}
-                    className="p-1 rounded text-slate-500 hover:text-slate-200 transition-colors ml-2"
+                    className="p-1 rounded text-slate-500 hover:text-slate-200 transition-colors ml-2 cursor-pointer"
                     title="Clear Selection"
                   >
                     <X className="w-4 h-4" />
