@@ -45,6 +45,15 @@ const activeChildProcesses = new Map<string, any>();
 // Standard macOS Homebrew PATH exported for GUI Tauri apps
 const MACOS_PATH_ENV = 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH";';
 
+export function expandUserPath(inputPath?: string): string {
+  if (!inputPath) return '';
+  if (inputPath.startsWith('~')) {
+    const home = process.env.HOME || '/Users/mistjs';
+    return inputPath.replace(/^~/, home);
+  }
+  return inputPath;
+}
+
 export async function sendSystemNotification(title: string, body: string) {
   try {
     let granted = await invoke<boolean>('plugin:notification|is_permission_granted').catch(() => false);
@@ -64,19 +73,13 @@ export async function sendSystemNotification(title: string, body: string) {
 
 export async function openFileInFinder(job: MediaJob, dbUrl?: string, configPath?: string): Promise<boolean> {
   try {
-    let targetPath = job.filePath || configPath || '~/Downloads/ClipGrab';
-    if (targetPath.startsWith('~')) {
-      targetPath = targetPath.replace('~', process.env.HOME || '/Users/mistjs');
-    }
-
-    const downloadFolder = (configPath || '~/Downloads/ClipGrab').startsWith('~')
-      ? (configPath || '~/Downloads/ClipGrab').replace('~', process.env.HOME || '/Users/mistjs')
-      : configPath || '~/Downloads/ClipGrab';
-
+    let targetPath = expandUserPath(job.filePath || configPath || '~/Downloads/ClipGrab');
+    const downloadFolder = expandUserPath(configPath || '~/Downloads/ClipGrab');
     const mediaId = extractMediaId(job.url) || '';
 
     // Database-backed Direct Path Finder Script
     const script = `
+      ${MACOS_PATH_ENV}
       TARGET="${targetPath.replace(/"/g, '\\"')}"
       TITLE="${(job.title || '').replace(/"/g, '\\"')}"
       FOLDER="${downloadFolder.replace(/"/g, '\\"')}"
@@ -110,7 +113,7 @@ export async function openFileInFinder(job: MediaJob, dbUrl?: string, configPath
         fi
       fi
 
-      open "${configPath || '~/Downloads'}"
+      open "${expandUserPath(configPath) || '/Users/mistjs/Downloads'}"
     `;
 
     const cmd = Command.create('sh', ['-c', script]);
@@ -307,20 +310,26 @@ export async function deleteJobFromQueue(jobId: string, dbUrl: string): Promise<
   }
 }
 
+// DIRECT DB FILE PATH RM -RF DISK DELETION
 export async function removeDownloadedFileAndResetJob(job: MediaJob, dbUrl: string): Promise<boolean> {
   if (activeChildProcesses.has(job.id)) {
     await cancelJobDownload(job.id, dbUrl);
   }
 
-  if (job.filePath) {
+  // Execute direct rm -rf on the exact filePath saved in DB
+  const rawPath = job.filePath || '';
+  if (rawPath) {
+    const expandedPath = expandUserPath(rawPath);
     try {
-      const cmd = Command.create('sh', ['-c', `rm -f "${job.filePath}"`]);
-      await cmd.execute();
+      const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} rm -rf "${expandedPath}"`]);
+      const res = await cmd.execute();
+      console.log(`[RM -RF DISK DELETION]: exit code ${res.code}, path: ${expandedPath}`);
     } catch (e) {
-      console.error('Failed to remove local file:', e);
+      console.error('Failed to execute rm -rf on filePath:', e);
     }
   }
 
+  // Update Neon DB status to pending, clear filePath, reset progress to 0
   try {
     const db = createNeonClient(dbUrl);
     await db
@@ -339,12 +348,14 @@ export async function deleteJobAndFile(job: MediaJob, dbUrl: string): Promise<bo
     await cancelJobDownload(job.id, dbUrl);
   }
 
-  if (job.filePath) {
+  const rawPath = job.filePath || '';
+  if (rawPath) {
+    const expandedPath = expandUserPath(rawPath);
     try {
-      const cmd = Command.create('sh', ['-c', `rm -f "${job.filePath}"`]);
+      const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} rm -rf "${expandedPath}"`]);
       await cmd.execute();
     } catch (e) {
-      console.error('Failed to remove local file:', e);
+      console.error('Failed to execute rm -rf on filePath:', e);
     }
   }
 
@@ -423,9 +434,7 @@ export async function executeJobDownload(
 
       if (currentUseGalleryDl) {
         toolBinary = 'gallery-dl';
-        const outputDir = config.downloadPath.startsWith('~')
-          ? config.downloadPath.replace('~', process.env.HOME || '/Users/mistjs')
-          : config.downloadPath;
+        const outputDir = expandUserPath(config.downloadPath);
         args = ['-d', outputDir, '-o', 'path={}'];
 
         if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
@@ -435,9 +444,7 @@ export async function executeJobDownload(
         args.push(targetUrl);
       } else {
         toolBinary = 'yt-dlp';
-        const outputTemplate = config.downloadPath.startsWith('~')
-          ? `${config.downloadPath.replace('~', process.env.HOME || '/Users/mistjs')}/%(title)s.%(ext)s`
-          : `${config.downloadPath}/%(title)s.%(ext)s`;
+        const outputTemplate = `${expandUserPath(config.downloadPath)}/%(title)s.%(ext)s`;
 
         args = ['--progress', '--newline', '--print', 'after_move:filepath', '-o', outputTemplate];
 
@@ -579,7 +586,7 @@ export async function executeJobDownload(
               onLogOutput(job.id, 'info', `✔ Process completed successfully (exit code 0)`);
             }
 
-            const targetFilePath = detectedFilePath || config.downloadPath;
+            const targetFilePath = detectedFilePath || expandUserPath(config.downloadPath);
             resolve({ success: true, filePath: targetFilePath });
           } else {
             const errorMsg = `Process exited with code ${data.code}`;
@@ -615,10 +622,10 @@ export async function executeJobDownload(
 
   // Update DB on final outcome with exact file path string
   if (result.success) {
-    const finalFilePath = result.filePath || config.downloadPath;
+    const finalFilePath = result.filePath || expandUserPath(config.downloadPath);
     let extractedTitle = job.title;
 
-    if (finalFilePath && finalFilePath !== config.downloadPath) {
+    if (finalFilePath && finalFilePath !== expandUserPath(config.downloadPath)) {
       const filename = finalFilePath.split('/').pop() || '';
       const cleanTitle = filename.replace(/\.[^/.]+$/, '');
       if (cleanTitle) {
