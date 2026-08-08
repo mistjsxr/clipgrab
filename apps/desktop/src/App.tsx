@@ -378,12 +378,18 @@ export default function App() {
   const handleConfirmedDownload = async (confirmedConfig: DownloadConfig) => {
     if (targetDownloadJobs.length === 0) return;
 
-    // Open terminal console for the first target job
-    setActiveConsoleJob(targetDownloadJobs[0]);
     setIsDownloadingBatch(true);
+    let successCount = 0;
+    let failCount = 0;
 
-    for (const job of targetDownloadJobs) {
-      await executeJobDownload(
+    for (let i = 0; i < targetDownloadJobs.length; i++) {
+      const job = targetDownloadJobs[i];
+      // Automatically switch active terminal window to the currently downloading job
+      setActiveConsoleJob(job);
+
+      appendJobLog(job.id, `[SYSTEM] Starting task ${i + 1} of ${targetDownloadJobs.length}: ${job.title || job.url}`);
+
+      const res = await executeJobDownload(
         job,
         confirmedConfig,
         dbUrl,
@@ -394,10 +400,29 @@ export default function App() {
           appendJobLog(jobId, text);
         }
       );
+
+      if (res.success) {
+        successCount++;
+        appendJobLog(job.id, `✔ Completed download ${i + 1}/${targetDownloadJobs.length}`);
+      } else {
+        failCount++;
+        appendJobLog(job.id, `[ERR] Failed download ${i + 1}/${targetDownloadJobs.length}: ${res.error}`);
+      }
+    }
+
+    // Append batch summary log line
+    const lastJob = targetDownloadJobs[targetDownloadJobs.length - 1];
+    if (lastJob) {
+      appendJobLog(lastJob.id, '================================================');
+      if (failCount === 0) {
+        appendJobLog(lastJob.id, `✔ BATCH COMPLETE: All ${successCount} media files downloaded successfully!`);
+      } else {
+        appendJobLog(lastJob.id, `⚠️ BATCH COMPLETED WITH NOTICES: ${successCount} Succeeded, ${failCount} Failed.`);
+      }
+      appendJobLog(lastJob.id, '================================================');
     }
 
     setIsDownloadingBatch(false);
-    setTargetDownloadJobs([]);
   };
 
   const handleCancelJob = async (jobId: string) => {
@@ -970,7 +995,7 @@ export default function App() {
       <CommandConsoleModal
         isOpen={activeConsoleJob !== null}
         onClose={() => setActiveConsoleJob(null)}
-        job={activeConsoleJob}
+        job={jobs.find((j) => j.id === activeConsoleJob?.id) || activeConsoleJob}
         logs={activeConsoleJob ? jobLogs[activeConsoleJob.id] || [] : []}
         onClearLogs={() => {
           if (activeConsoleJob) {

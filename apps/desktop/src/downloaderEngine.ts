@@ -372,7 +372,8 @@ export async function executeJobDownload(
           ? `${config.downloadPath.replace('~', process.env.HOME || '/Users/mistjs')}/%(title)s.%(ext)s`
           : `${config.downloadPath}/%(title)s.%(ext)s`;
 
-        args = ['--newline', '--print', 'after_move:filepath', '-o', outputTemplate];
+        // Explicitly include --progress along with --newline and --print after_move:filepath
+        args = ['--progress', '--newline', '--print', 'after_move:filepath', '-o', outputTemplate];
 
         if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
           args.push('--cookies-from-browser', config.cookiesBrowser);
@@ -421,36 +422,74 @@ export async function executeJobDownload(
       try {
         const cmd = Command.create('sh', ['-c', commandToExec]);
         let lastProgress = 5;
+        let lastDbProgress = 5;
+        let activeStreamIndex = 0;
 
-        cmd.stdout.on('data', (line: string) => {
-          if (onLogOutput) {
-            onLogOutput(job.id, 'stdout', line);
-          }
+        cmd.stdout.on('data', (chunk: string) => {
+          // Split stdout by carriage returns (\r) and newlines (\n)
+          const lines = chunk.split(/[\r\n]+/);
+          for (const line of lines) {
+            if (!line.trim()) continue;
 
-          // Parse exact output destination path from stdout for yt-dlp & gallery-dl
-          const destMatch = line.match(/(?:Destination:|Merging formats into|has already been downloaded)\s+["']?([^"'\r\n]+)/i);
-          if (destMatch && destMatch[1]) {
-            const candidate = destMatch[1].trim();
-            if (!candidate.endsWith('.tmp') && !candidate.endsWith('.part')) {
-              detectedFilePath = candidate;
+            if (onLogOutput) {
+              onLogOutput(job.id, 'stdout', line);
             }
-          } else {
-            const trimmedLine = line.trim();
-            if (trimmedLine.startsWith('/') && !trimmedLine.endsWith('.tmp') && !trimmedLine.endsWith('.part')) {
-              detectedFilePath = trimmedLine;
-            }
-          }
 
-          const progressMatch = line.match(/\[download\]\s+(\d+(?:\.\d+)?)%/);
-          if (progressMatch) {
-            const parsedProgress = Math.min(Math.round(parseFloat(progressMatch[1])), 99);
-            if (parsedProgress > lastProgress) {
-              lastProgress = parsedProgress;
-              db.update(mediaQueue)
-                .set({ progress: parsedProgress, updatedAt: new Date() })
-                .where(eq(mediaQueue.id, job.id))
-                .catch(console.error);
-              if (onProgress) onProgress(job.id, parsedProgress, 'downloading');
+            // Track destination files & streams
+            if (line.includes('[download] Destination:')) {
+              activeStreamIndex++;
+              const candidate = line.replace('[download] Destination:', '').trim();
+              if (!candidate.endsWith('.tmp') && !candidate.endsWith('.part')) {
+                detectedFilePath = candidate;
+              }
+            } else {
+              const destMatch = line.match(/(?:Merging formats into|has already been downloaded)\s+["']?([^"'\r\n]+)/i);
+              if (destMatch && destMatch[1]) {
+                const candidate = destMatch[1].trim();
+                if (!candidate.endsWith('.tmp') && !candidate.endsWith('.part')) {
+                  detectedFilePath = candidate;
+                }
+              }
+            }
+
+            // Parse progress e.g. "[download]  45.6% of  15.20MiB"
+            const progressMatch = line.match(/\[download\]\s+(\d+(?:\.\d+)?)%/i);
+            if (progressMatch) {
+              const pct = parseFloat(progressMatch[1]);
+              let mappedProgress = 5;
+
+              if (activeStreamIndex <= 1) {
+                // Stream 1 (video): 5% -> 75%
+                mappedProgress = 5 + Math.round(pct * 0.70);
+              } else {
+                // Stream 2 (audio): 75% -> 92%
+                mappedProgress = 75 + Math.round(pct * 0.17);
+              }
+
+              mappedProgress = Math.min(Math.max(mappedProgress, 5), 94);
+
+              if (mappedProgress > lastProgress) {
+                lastProgress = mappedProgress;
+                
+                // 1. Instantly update React local UI state with zero latency
+                if (onProgress) {
+                  onProgress(job.id, mappedProgress, 'downloading');
+                }
+
+                // 2. Throttle Neon Postgres DB writes to every 10% step
+                if (mappedProgress - lastDbProgress >= 10) {
+                  lastDbProgress = mappedProgress;
+                  db.update(mediaQueue)
+                    .set({ progress: mappedProgress, updatedAt: new Date() })
+                    .where(eq(mediaQueue.id, job.id))
+                    .catch(console.error);
+                }
+              }
+            } else if (line.includes('[ffmpeg]') || line.includes('[Merger]')) {
+              lastProgress = 95;
+              if (onProgress) {
+                onProgress(job.id, 95, 'downloading');
+              }
             }
           }
         });
