@@ -64,6 +64,7 @@ export default function App() {
   const [isDownloadingBatch, setIsDownloadingBatch] = useState(false);
   const [jobLogs, setJobLogs] = useState<Record<string, string[]>>({});
   const [activeConsoleJob, setActiveConsoleJob] = useState<MediaJob | null>(null);
+  const [userClosedConsole, setUserClosedConsole] = useState(false);
 
   // Load existing credentials & download config on startup
   useEffect(() => {
@@ -379,13 +380,17 @@ export default function App() {
     if (targetDownloadJobs.length === 0) return;
 
     setIsDownloadingBatch(true);
+    setUserClosedConsole(false);
     let successCount = 0;
     let failCount = 0;
 
     for (let i = 0; i < targetDownloadJobs.length; i++) {
       const job = targetDownloadJobs[i];
-      // Automatically switch active terminal window to the currently downloading job
-      setActiveConsoleJob(job);
+      
+      // Only switch active terminal window if user hasn't explicitly closed it
+      if (!userClosedConsole) {
+        setActiveConsoleJob(job);
+      }
 
       appendJobLog(job.id, `[SYSTEM] Starting task ${i + 1} of ${targetDownloadJobs.length}: ${job.title || job.url}`);
 
@@ -426,8 +431,8 @@ export default function App() {
   };
 
   const handleCancelJob = async (jobId: string) => {
-    appendJobLog(jobId, '[SYSTEM] User requested process cancellation...');
-    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, status: 'failed', error: 'Cancelled' } : j)));
+    appendJobLog(jobId, '[SYSTEM] User requested process termination (stopping active download & preserving content)...');
+    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, status: 'failed', error: 'Stopped by user' } : j)));
     await cancelJobDownload(jobId, dbUrl);
   };
 
@@ -684,22 +689,35 @@ export default function App() {
                 <Settings2 className="w-4 h-4 mr-1.5" /> Engine Options
               </Button>
 
-              <Button
-                variant="primary"
-                size="sm"
-                className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-violet-600 to-pink-500 hover:from-pink-500 hover:to-violet-600 disabled:opacity-50"
-                onClick={triggerBatchJobOptions}
-                disabled={isDownloadingBatch || (pendingJobsCount === 0 && downloadingJobsCount === 0)}
-              >
-                {isDownloadingBatch ? (
+              {isDownloadingBatch ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-violet-600 hover:to-cyan-600 shadow-[0_0_15px_rgba(6,182,212,0.3)] animate-pulse cursor-pointer"
+                  onClick={() => {
+                    setUserClosedConsole(false);
+                    const activeJob = jobs.find((j) => j.status === 'downloading') || targetDownloadJobs[0];
+                    if (activeJob) {
+                      setActiveConsoleJob(activeJob);
+                    }
+                  }}
+                  title="Click to view live CLI Terminal Console"
+                >
                   <RefreshCw className="w-4 h-4 animate-spin mr-1.5" />
-                ) : (
+                  Downloading... (View CLI)
+                </Button>
+              ) : (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="h-9 px-4 text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-violet-600 to-pink-500 hover:from-pink-500 hover:to-violet-600 disabled:opacity-50"
+                  onClick={triggerBatchJobOptions}
+                  disabled={pendingJobsCount === 0 && downloadingJobsCount === 0}
+                >
                   <Play className="w-4 h-4 mr-1.5 fill-current" />
-                )}
-                {isDownloadingBatch
-                  ? `Downloading...`
-                  : `Download All (${pendingJobsCount})`}
-              </Button>
+                  Download All ({pendingJobsCount})
+                </Button>
+              )}
             </div>
           </div>
 
@@ -916,7 +934,10 @@ export default function App() {
                             <div className="flex items-center justify-end space-x-2">
                               {/* Terminal Logs Icon Button for any job */}
                               <button
-                                onClick={() => setActiveConsoleJob(job)}
+                                onClick={() => {
+                                  setUserClosedConsole(false);
+                                  setActiveConsoleJob(job);
+                                }}
                                 className="p-1.5 rounded text-slate-500 hover:text-cyan-400 hover:bg-slate-900 transition-colors"
                                 title="View CLI Terminal Logs"
                               >
@@ -944,9 +965,9 @@ export default function App() {
                                     size="sm"
                                     className="px-2 py-1 text-[10px] bg-rose-950/60 text-rose-400 border-rose-900/60 hover:bg-rose-900"
                                     onClick={() => handleCancelJob(job.id)}
-                                    title="Cancel Active Download"
+                                    title="Stop Download (Preserve Downloaded Content)"
                                   >
-                                    <Ban className="w-3 h-3 mr-1" /> Cancel
+                                    <Square className="w-3 h-3 mr-1 fill-current" /> Stop
                                   </Button>
                                 </>
                               )}
@@ -994,7 +1015,10 @@ export default function App() {
       {/* Live Command Console Terminal Modal */}
       <CommandConsoleModal
         isOpen={activeConsoleJob !== null}
-        onClose={() => setActiveConsoleJob(null)}
+        onClose={() => {
+          setUserClosedConsole(true);
+          setActiveConsoleJob(null);
+        }}
         job={jobs.find((j) => j.id === activeConsoleJob?.id) || activeConsoleJob}
         logs={activeConsoleJob ? jobLogs[activeConsoleJob.id] || [] : []}
         onClearLogs={() => {
