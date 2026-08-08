@@ -310,22 +310,41 @@ export async function deleteJobFromQueue(jobId: string, dbUrl: string): Promise<
   }
 }
 
-// DIRECT DB FILE PATH RM -RF DISK DELETION
+// SAFE INDIVIDUAL FILE DELETION — NEVER DELETES THE PARENT FOLDER
 export async function removeDownloadedFileAndResetJob(job: MediaJob, dbUrl: string): Promise<boolean> {
   if (activeChildProcesses.has(job.id)) {
     await cancelJobDownload(job.id, dbUrl);
   }
 
-  // Execute direct rm -rf on the exact filePath saved in DB
   const rawPath = job.filePath || '';
   if (rawPath) {
     const expandedPath = expandUserPath(rawPath);
+    
+    // SAFEGUARDS:
+    // 1. Only run rm -f if target is a REGULAR FILE (-f).
+    // 2. NEVER run rm on a DIRECTORY (-d).
+    const safeDeleteScript = `
+      ${MACOS_PATH_ENV}
+      TARGET="${expandedPath.replace(/"/g, '\\"')}"
+
+      if [ -d "$TARGET" ]; then
+        echo "[SAFEGUARD BLOCK]: Target is a directory ($TARGET). Parent folder will NOT be deleted."
+        exit 0
+      fi
+
+      if [ -f "$TARGET" ]; then
+        rm -f -- "$TARGET"
+        echo "[SUCCESS DELETED FILE]: $TARGET"
+        exit 0
+      fi
+    `;
+
     try {
-      const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} rm -rf "${expandedPath}"`]);
+      const cmd = Command.create('sh', ['-c', safeDeleteScript]);
       const res = await cmd.execute();
-      console.log(`[RM -RF DISK DELETION]: exit code ${res.code}, path: ${expandedPath}`);
+      console.log(`[SAFE FILE DISK DELETION LOG]: ${res.stdout.trim()}`);
     } catch (e) {
-      console.error('Failed to execute rm -rf on filePath:', e);
+      console.error('Failed to execute safe rm -f on filePath:', e);
     }
   }
 
@@ -351,11 +370,29 @@ export async function deleteJobAndFile(job: MediaJob, dbUrl: string): Promise<bo
   const rawPath = job.filePath || '';
   if (rawPath) {
     const expandedPath = expandUserPath(rawPath);
+    
+    const safeDeleteScript = `
+      ${MACOS_PATH_ENV}
+      TARGET="${expandedPath.replace(/"/g, '\\"')}"
+
+      if [ -d "$TARGET" ]; then
+        echo "[SAFEGUARD BLOCK]: Target is a directory ($TARGET). Parent folder will NOT be deleted."
+        exit 0
+      fi
+
+      if [ -f "$TARGET" ]; then
+        rm -f -- "$TARGET"
+        echo "[SUCCESS DELETED FILE]: $TARGET"
+        exit 0
+      fi
+    `;
+
     try {
-      const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} rm -rf "${expandedPath}"`]);
-      await cmd.execute();
+      const cmd = Command.create('sh', ['-c', safeDeleteScript]);
+      const res = await cmd.execute();
+      console.log(`[SAFE FILE DISK DELETION LOG]: ${res.stdout.trim()}`);
     } catch (e) {
-      console.error('Failed to execute rm -rf on filePath:', e);
+      console.error('Failed to execute safe rm -f on filePath:', e);
     }
   }
 
@@ -586,7 +623,11 @@ export async function executeJobDownload(
               onLogOutput(job.id, 'info', `✔ Process completed successfully (exit code 0)`);
             }
 
-            const targetFilePath = detectedFilePath || expandUserPath(config.downloadPath);
+            // SAFEGUARD: Only return detectedFilePath if it's a specific file, NEVER the parent directory
+            const targetFilePath = (detectedFilePath && detectedFilePath !== expandUserPath(config.downloadPath))
+              ? detectedFilePath
+              : undefined;
+
             resolve({ success: true, filePath: targetFilePath });
           } else {
             const errorMsg = `Process exited with code ${data.code}`;
@@ -622,10 +663,10 @@ export async function executeJobDownload(
 
   // Update DB on final outcome with exact file path string
   if (result.success) {
-    const finalFilePath = result.filePath || expandUserPath(config.downloadPath);
+    const finalFilePath = result.filePath || undefined;
     let extractedTitle = job.title;
 
-    if (finalFilePath && finalFilePath !== expandUserPath(config.downloadPath)) {
+    if (finalFilePath) {
       const filename = finalFilePath.split('/').pop() || '';
       const cleanTitle = filename.replace(/\.[^/.]+$/, '');
       if (cleanTitle) {
@@ -639,7 +680,7 @@ export async function executeJobDownload(
         status: 'completed',
         progress: 100,
         title: extractedTitle || job.title,
-        filePath: finalFilePath,
+        ...(finalFilePath ? { filePath: finalFilePath } : {}),
         updatedAt: new Date()
       })
       .where(eq(mediaQueue.id, job.id))
