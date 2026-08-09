@@ -14,6 +14,10 @@ export interface DownloadConfig {
   autoUpdateEngine: boolean;
   eagleApiToken?: string;
   eaglePort?: string;
+  // gallery-dl Photo & Session Settings
+  gallerydlBrowser?: 'safari' | 'chrome' | 'brave' | 'firefox' | 'edge' | 'opera' | 'vivaldi';
+  gallerydlFilenameFormat?: string;
+  gallerydlSleep?: string;
 }
 
 export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
@@ -26,11 +30,14 @@ export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
   autoUpdateEngine: false, // Default false to prevent download startup delays
   eagleApiToken: '',
   eaglePort: '22745',
+  gallerydlBrowser: 'safari',
+  gallerydlFilenameFormat: 'Photo by {username|author|owner}_{id|shortcode|tweet_id}_{num}.{extension}',
+  gallerydlSleep: '2-5',
 };
 
 export interface EngineBinaryStatus {
   name: string;
-  binary: 'yt-dlp' | 'ffmpeg';
+  binary: 'yt-dlp' | 'ffmpeg' | 'gallery-dl';
   installed: boolean;
   version: string;
   updateAvailable: boolean;
@@ -148,7 +155,7 @@ export async function openFileInFinder(job: MediaJob, dbUrl?: string, configPath
 }
 
 // Engine Binary Version & Health Inspection Functions
-export async function getBinaryVersion(binary: 'yt-dlp' | 'ffmpeg'): Promise<{ installed: boolean; version: string }> {
+export async function getBinaryVersion(binary: 'yt-dlp' | 'ffmpeg' | 'gallery-dl'): Promise<{ installed: boolean; version: string }> {
   try {
     let flag = '--version';
     if (binary === 'ffmpeg') flag = '-version';
@@ -169,10 +176,10 @@ export async function getBinaryVersion(binary: 'yt-dlp' | 'ffmpeg'): Promise<{ i
   }
 }
 
-export async function checkBinaryUpdate(binary: 'yt-dlp' | 'ffmpeg'): Promise<{ updateAvailable: boolean; latestVersion?: string }> {
+export async function checkBinaryUpdate(binary: 'yt-dlp' | 'ffmpeg' | 'gallery-dl'): Promise<{ updateAvailable: boolean; latestVersion?: string }> {
   try {
-    if (binary === 'yt-dlp') {
-      const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} yt-dlp -U`]);
+    if (binary === 'yt-dlp' || binary === 'gallery-dl') {
+      const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} ${binary} -U`]);
       const output = await cmd.execute();
       const text = (output.stdout + output.stderr).toLowerCase();
       if (text.includes('updating') || text.includes('available') || text.includes('update')) {
@@ -194,7 +201,7 @@ export async function checkBinaryUpdate(binary: 'yt-dlp' | 'ffmpeg'): Promise<{ 
   }
 }
 
-export async function updateBinaryOnDemand(binary: 'yt-dlp' | 'ffmpeg'): Promise<{ success: boolean; message: string; newVersion?: string }> {
+export async function updateBinaryOnDemand(binary: 'yt-dlp' | 'ffmpeg' | 'gallery-dl'): Promise<{ success: boolean; message: string; newVersion?: string }> {
   try {
     let script = `${MACOS_PATH_ENV} ${binary} -U`;
     if (binary === 'ffmpeg') {
@@ -626,103 +633,106 @@ export function exportHistoryToTxt(records: any[]): string {
   return header + body;
 }
 
-export async function runInstagramEmbedScraper(
-  url: string,
-  downloadDir: string,
+export async function runGalleryDlInstagram(
+  targetUrl: string,
+  targetDir: string,
+  browserChoice: string = 'safari',
+  filenameFormat?: string,
+  sleepSetting?: string,
   onLogOutput?: (type: 'stdout' | 'stderr' | 'info', text: string) => void
 ): Promise<{ success: boolean; files: string[]; error?: string }> {
-  try {
-    const pyScript = `import urllib.request, re, ssl, json, os, sys
+  return new Promise(async (resolve) => {
+    const downloadDir = expandUserPath(targetDir);
+    const downloadedFiles: string[] = [];
+    let detectedError: string | null = null;
 
-ssl._create_default_https_context = ssl._create_unverified_context
-raw_url = sys.argv[1]
-out_dir = sys.argv[2]
+    const safeUrl = targetUrl.replace(/"/g, '\\"');
+    const safeDir = downloadDir.replace(/"/g, '\\"');
+    const safeBrowser = (browserChoice || 'safari').replace(/"/g, '\\"');
+    const safeSleep = (sleepSetting || '2-5').replace(/"/g, '\\"');
+    const fmt = filenameFormat || 'Photo by {username|author|owner}_{id|shortcode|tweet_id}_{num}.{extension}';
+    const safeFmt = fmt.replace(/"/g, '\\"');
 
-shortcode_match = re.search(r'/(?:p|reel|reels)/([A-Za-z0-9_-]+)', raw_url)
-shortcode = shortcode_match.group(1) if shortcode_match else 'post'
-embed_url = f'https://www.instagram.com/p/{shortcode}/embed/captioned/'
-
-req = urllib.request.Request(embed_url, headers={
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-})
-
-try:
-    html = urllib.request.urlopen(req).read().decode('utf-8')
-except Exception as e:
-    print(json.dumps({'success': False, 'error': str(e)}))
-    sys.exit(0)
-
-author_match = re.search(r'"username":\s*"([^"]+)"', html) or re.search(r'class="UsernameText">([^<]+)', html)
-author = author_match.group(1) if author_match else 'instagram_user'
-
-cdn_pattern = r"""https://[^\s"'><]+\.(?:jpg|jpeg|png|webp)[^\s"'><]*"""
-raw_urls = re.findall(cdn_pattern, html)
-
-downloaded = []
-seen = set()
-
-idx = 1
-for u in raw_urls:
-    u_clean = u.replace('&amp;', '&').replace('\\u0026', '&')
-    if 'profile_pic' in u_clean or 's150x150' in u_clean or 's320x320' in u_clean:
-        continue
-    
-    clean_cdn_url = re.sub(r'stp=[^&]+&?', '', u_clean)
-    if clean_cdn_url in seen:
-        continue
-    seen.add(clean_cdn_url)
-
-    ext = 'jpg'
-    if '.png' in u_clean: ext = 'png'
-    elif '.webp' in u_clean: ext = 'webp'
-
-    fn = f'Photo by {author}_{shortcode}_{idx}.{ext}'
-    idx += 1
-
-    img_req = urllib.request.Request(clean_cdn_url, headers={
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    })
-    try:
-        data = urllib.request.urlopen(img_req).read()
-        if len(data) > 3000:
-            os.makedirs(out_dir, exist_ok=True)
-            target_path = os.path.join(out_dir, fn)
-            with open(target_path, 'wb') as f:
-                f.write(data)
-            downloaded.append(target_path)
-    except Exception:
-        pass
-
-print(json.dumps({'success': len(downloaded) > 0, 'files': downloaded}))
-`;
-
-    const shCmd = `${MACOS_PATH_ENV} python3 - "${url.replace(/"/g, '\\"')}" "${downloadDir.replace(/"/g, '\\"')}" << 'PYEOF'\n${pyScript}\nPYEOF\n`;
-    const cmd = Command.create('sh', ['-c', shCmd]);
-    const output = await cmd.execute();
-
-    if (onLogOutput && output.stderr) {
-      onLogOutput('stderr', output.stderr);
+    let sleepArg = '';
+    if (safeSleep && safeSleep !== '0') {
+      sleepArg = `--sleep "${safeSleep}" `;
     }
 
-    if (output.code === 0 && output.stdout) {
-      const parsed = JSON.parse(output.stdout.trim());
-      if (parsed.success && parsed.files && parsed.files.length > 0) {
-        if (onLogOutput) {
-          onLogOutput('info', `[INSTAGRAM NATIVE] Extracted ${parsed.files.length} photo file(s) cleanly.`);
-        }
-        return { success: true, files: parsed.files };
-      } else if (parsed.error) {
-        return { success: false, files: [], error: parsed.error };
-      }
-    }
-  } catch (err: any) {
-    console.error('runInstagramEmbedScraper error:', err);
+    const cmdStr = `${MACOS_PATH_ENV} gallery-dl --cookies-from-browser "${safeBrowser}" ${sleepArg}--directory "${safeDir}" -o "filename=${safeFmt}" "${safeUrl}"`;
+
     if (onLogOutput) {
-      onLogOutput('stderr', `[EMBED ERR] ${err?.message || err}`);
+      onLogOutput('info', `$ ${cmdStr}`);
     }
-    return { success: false, files: [], error: err?.message || String(err) };
-  }
-  return { success: false, files: [], error: 'No media extracted from public embed page' };
+
+    try {
+      const cmd = Command.create('sh', ['-c', cmdStr]);
+
+      cmd.stdout.on('data', (line: string) => {
+        if (onLogOutput) {
+          onLogOutput('stdout', line);
+        }
+
+        const trimmed = line.trim();
+        if (trimmed.startsWith('/') || trimmed.includes(downloadDir)) {
+          const matchedPath = trimmed.replace(/^#\s*/, '').trim();
+          if (matchedPath.startsWith('/') && !downloadedFiles.includes(matchedPath)) {
+            downloadedFiles.push(matchedPath);
+          }
+        }
+      });
+
+      cmd.stderr.on('data', (line: string) => {
+        if (onLogOutput) {
+          onLogOutput('stderr', line);
+        }
+
+        if (line.includes('login') || line.includes('redirect to login page') || line.includes('login required')) {
+          detectedError = `Instagram session required. Please log into Instagram on ${browserChoice} browser or check browser permissions.`;
+        } else if (line.includes('429') || line.includes('Too Many Requests')) {
+          detectedError = 'Instagram rate limit reached (HTTP 429). Please wait a few minutes before retrying.';
+        } else if (line.includes('Errno 1') || line.includes('Operation not permitted')) {
+          detectedError = `macOS Security blocked reading cookies from ${browserChoice}. Please grant Full Disk Access to ClipGrab or try another browser.`;
+        }
+      });
+
+      cmd.on('close', async (data) => {
+        if (downloadedFiles.length === 0) {
+          try {
+            const shortcodeMatch = targetUrl.match(/\/(?:p|reel|reels)\/([A-Za-z0-9_-]+)/);
+            if (shortcodeMatch) {
+              const shortcode = shortcodeMatch[1];
+              const scanCmd = Command.create('sh', [
+                '-c',
+                `ls -1 "${safeDir}"/*_${shortcode}_* 2>/dev/null`
+              ]);
+              const scanOut = await scanCmd.execute();
+              if (scanOut.code === 0 && scanOut.stdout) {
+                const lines = scanOut.stdout.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
+                downloadedFiles.push(...lines);
+              }
+            }
+          } catch (scanErr) {
+            // Directory scan fallback error
+          }
+        }
+
+        if (data.code === 0 && downloadedFiles.length > 0) {
+          resolve({ success: true, files: downloadedFiles });
+        } else if (downloadedFiles.length > 0) {
+          resolve({ success: true, files: downloadedFiles });
+        } else {
+          const finalError = detectedError || `gallery-dl process exited with code ${data.code}`;
+          resolve({ success: false, files: [], error: finalError });
+        }
+      });
+
+      cmd.spawn().catch((spawnErr) => {
+        resolve({ success: false, files: [], error: spawnErr?.message || 'Failed to spawn gallery-dl binary' });
+      });
+    } catch (err: any) {
+      resolve({ success: false, files: [], error: err?.message || 'gallery-dl execution error' });
+    }
+  });
 }
 
 export async function executeJobDownload(
@@ -956,24 +966,27 @@ export async function executeJobDownload(
 
   let result: { success: boolean; filePath?: string; error?: string } = { success: false };
 
-  // 1. For Instagram Photo posts (/p/): Run Public Embed Scraper EXCLUSIVELY!
+  // 1. For Instagram Photo posts (/p/): Run gallery-dl with session cookies EXCLUSIVELY!
   if (isInstagramPhoto) {
     if (onLogOutput) {
-      onLogOutput(job.id, 'info', '[INSTAGRAM PHOTO] Extracting photos directly via Public Instagram Embed Engine...');
+      onLogOutput(job.id, 'info', '[INSTAGRAM PHOTO] Extracting media via gallery-dl...');
     }
     try {
-      const embedResult = await runInstagramEmbedScraper(
+      const embedResult = await runGalleryDlInstagram(
         targetUrl,
         expandUserPath(config.downloadPath),
+        config.gallerydlBrowser || 'safari',
+        config.gallerydlFilenameFormat,
+        config.gallerydlSleep,
         (type, text) => { if (onLogOutput) onLogOutput(job.id, type, text); }
       );
       if (embedResult.success && embedResult.files.length > 0) {
         result = { success: true, filePath: embedResult.files.join('||') };
         if (onLogOutput) {
-          onLogOutput(job.id, 'info', `[INSTAGRAM PHOTO] ✔ Successfully downloaded ${embedResult.files.length} photo file(s) via Public Embed Engine!`);
+          onLogOutput(job.id, 'info', `[INSTAGRAM PHOTO] ✔ Successfully downloaded ${embedResult.files.length} photo file(s) via gallery-dl!`);
         }
       } else {
-        const errorMsg = embedResult.error || 'Failed to extract photos from public embed page';
+        const errorMsg = embedResult.error || 'Failed to download photos via gallery-dl';
         if (onLogOutput) {
           onLogOutput(job.id, 'stderr', `[ERR] ${errorMsg}`);
         }
@@ -985,7 +998,7 @@ export async function executeJobDownload(
         return { success: false, error: errorMsg };
       }
     } catch (e: any) {
-      const errorMsg = e?.message || 'Instagram Embed Engine execution failed';
+      const errorMsg = e?.message || 'gallery-dl execution failed';
       if (onLogOutput) {
         onLogOutput(job.id, 'stderr', `[ERR] ${errorMsg}`);
       }

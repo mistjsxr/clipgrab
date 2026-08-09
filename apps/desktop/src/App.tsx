@@ -79,6 +79,7 @@ export default function App() {
   const [engineStatuses, setEngineStatuses] = useState<EngineBinaryStatus[]>([
     { name: 'yt-dlp', binary: 'yt-dlp', installed: false, version: 'Checking...', updateAvailable: false, checking: true, updating: false },
     { name: 'FFmpeg', binary: 'ffmpeg', installed: false, version: 'Checking...', updateAvailable: false, checking: true, updating: false },
+    { name: 'gallery-dl', binary: 'gallery-dl', installed: false, version: 'Checking...', updateAvailable: false, checking: true, updating: false },
   ]);
 
   // Download Engine & Terminal Console state
@@ -95,7 +96,7 @@ export default function App() {
   // Non-blocking Startup Engine Health & Version Inspection
   useEffect(() => {
     const inspectEngines = async () => {
-      for (const b of ['yt-dlp', 'ffmpeg'] as const) {
+      for (const b of ['yt-dlp', 'ffmpeg', 'gallery-dl'] as const) {
         const ver = await getBinaryVersion(b);
         setEngineStatuses((prev) =>
           prev.map((item) =>
@@ -132,7 +133,7 @@ export default function App() {
 
   const handleRefreshEngineHealth = async () => {
     setEngineStatuses((prev) => prev.map((s) => ({ ...s, checking: true })));
-    for (const b of ['yt-dlp', 'ffmpeg'] as const) {
+    for (const b of ['yt-dlp', 'ffmpeg', 'gallery-dl'] as const) {
       const ver = await getBinaryVersion(b);
       const updateInfo = ver.installed ? await checkBinaryUpdate(b) : { updateAvailable: false };
       setEngineStatuses((prev) =>
@@ -152,7 +153,7 @@ export default function App() {
     }
   };
 
-  const handleUpdateEngineBinary = async (binary: 'yt-dlp' | 'ffmpeg') => {
+  const handleUpdateEngineBinary = async (binary: 'yt-dlp' | 'ffmpeg' | 'gallery-dl') => {
     setEngineStatuses((prev) =>
       prev.map((item) => (item.binary === binary ? { ...item, updating: true } : item))
     );

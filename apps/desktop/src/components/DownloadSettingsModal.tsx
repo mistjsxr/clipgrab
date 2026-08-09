@@ -24,9 +24,10 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
   title,
 }) => {
   const [localConfig, setLocalConfig] = useState<DownloadConfig>(config);
-  const [toolsStatus, setToolsStatus] = useState<{ ytdlp: boolean; ffmpeg: boolean }>({
+  const [toolsStatus, setToolsStatus] = useState<{ ytdlp: boolean; ffmpeg: boolean; gallerydl: boolean }>({
     ytdlp: false,
     ffmpeg: false,
+    gallerydl: false,
   });
   const [installedBrowsers, setInstalledBrowsers] = useState<Array<{ id: string; name: string; installed: boolean }>>([]);
 
@@ -43,6 +44,7 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
     if (isOpen) {
       checkToolAvailability('yt-dlp').then((available) => setToolsStatus((s) => ({ ...s, ytdlp: available })));
       checkToolAvailability('ffmpeg').then((available) => setToolsStatus((s) => ({ ...s, ffmpeg: available })));
+      checkToolAvailability('gallery-dl').then((available) => setToolsStatus((s) => ({ ...s, gallerydl: available })));
       detectInstalledBrowsers().then((browsers) => setInstalledBrowsers(browsers));
     }
   }, [isOpen]);
@@ -85,7 +87,7 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
               <h2 className="text-sm font-black uppercase tracking-wider text-slate-100">
                 {title || 'Media Download Options'}
               </h2>
-              <p className="text-[10px] text-slate-500">Configure destination, container format, video codec, and session cookies.</p>
+              <p className="text-[10px] text-slate-500">Configure destination, yt-dlp video options, and gallery-dl photo cookie preferences.</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-500 hover:text-cyber-pink text-xs font-bold transition-colors">
@@ -97,46 +99,60 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
         <div className="p-3 bg-slate-900/40 border border-slate-900 rounded-md space-y-2">
           <label className="text-[9px] uppercase font-bold tracking-wider text-slate-500">Detected System CLI Engines</label>
           <div className="grid grid-cols-3 gap-2">
-            <div className="flex items-center space-x-1.5 bg-slate-950 p-2 rounded border border-slate-900">
-              {toolsStatus.ytdlp ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <XCircle className="w-3.5 h-3.5 text-cyber-pink" />}
-              <span className="text-[10px] font-mono font-bold text-slate-300">yt-dlp</span>
+            <div className="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-900">
+              <div className="flex items-center space-x-1.5">
+                {toolsStatus.ytdlp ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <XCircle className="w-3.5 h-3.5 text-cyber-pink" />}
+                <span className="text-[10px] font-mono font-bold text-slate-300">yt-dlp</span>
+              </div>
             </div>
-            <div className="flex items-center space-x-1.5 bg-slate-950 p-2 rounded border border-slate-900">
-              {toolsStatus.ffmpeg ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <XCircle className="w-3.5 h-3.5 text-amber-400" />}
-              <span className="text-[10px] font-mono font-bold text-slate-300">ffmpeg</span>
+            <div className="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-900">
+              <div className="flex items-center space-x-1.5">
+                {toolsStatus.ffmpeg ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <XCircle className="w-3.5 h-3.5 text-amber-400" />}
+                <span className="text-[10px] font-mono font-bold text-slate-300">ffmpeg</span>
+              </div>
+            </div>
+            <div className="flex items-center justify-between bg-slate-950 p-2 rounded border border-slate-900">
+              <div className="flex items-center space-x-1.5">
+                {toolsStatus.gallerydl ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <XCircle className="w-3.5 h-3.5 text-cyber-pink" />}
+                <span className="text-[10px] font-mono font-bold text-slate-300">gallery-dl</span>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Form Controls */}
-        <div className="space-y-4">
-          {/* Destination Path Selector */}
-          <div className="space-y-1.5">
-            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Save Destination Folder</label>
-            <div className="flex items-center space-x-2">
-              <input
-                type="text"
-                value={localConfig.downloadPath}
-                onChange={(e) => setLocalConfig({ ...localConfig, downloadPath: e.target.value })}
-                className="flex-1 bg-slate-900/60 border border-slate-800 rounded-md px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyber-cyan"
-              />
-              <Button variant="secondary" size="sm" className="h-9 px-3 text-xs" onClick={handlePickDirectory}>
-                <Folder className="w-3.5 h-3.5 mr-1.5 text-cyber-cyan" /> Browse
-              </Button>
-            </div>
+        {/* Save Destination Folder Selector */}
+        <div className="space-y-1.5">
+          <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Save Destination Folder</label>
+          <div className="flex items-center space-x-2">
+            <input
+              type="text"
+              value={localConfig.downloadPath}
+              onChange={(e) => setLocalConfig({ ...localConfig, downloadPath: e.target.value })}
+              className="flex-1 bg-slate-900/60 border border-slate-800 rounded-md px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyber-cyan"
+            />
+            <Button variant="secondary" size="sm" className="h-9 px-3 text-xs" onClick={handlePickDirectory}>
+              <Folder className="w-3.5 h-3.5 mr-1.5 text-cyber-cyan" /> Browse
+            </Button>
+          </div>
+        </div>
+
+        {/* SECTION 1: yt-dlp (Video Settings) */}
+        <div className="p-3 bg-slate-900/30 border border-slate-800/80 rounded-lg space-y-3">
+          <div className="flex items-center space-x-2 border-b border-slate-800 pb-2">
+            <Film className="w-4 h-4 text-cyber-pink" />
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200">yt-dlp Engine (Video & Audio Options)</h3>
           </div>
 
-          {/* Grid Options */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-3">
             {/* Resolution / Quality */}
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
-                <Film className="w-3 h-3 mr-1 text-cyber-pink" /> Quality / Resolution
+                Quality / Resolution
               </label>
               <select
                 value={localConfig.quality}
                 onChange={(e) => setLocalConfig({ ...localConfig, quality: e.target.value as any })}
-                className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
+                className="w-full bg-slate-950 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
               >
                 <option value="best">Best Available (Highest)</option>
                 <option value="4k">4K (2160p Ultra HD)</option>
@@ -148,14 +164,14 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
             </div>
 
             {/* Container Extension Format */}
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
-                <Settings2 className="w-3 h-3 mr-1 text-cyber-cyan" /> File Container Format
+                File Container Format
               </label>
               <select
                 value={localConfig.container || 'mp4'}
                 onChange={(e) => setLocalConfig({ ...localConfig, container: e.target.value as any })}
-                className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
+                className="w-full bg-slate-950 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
               >
                 <option value="mp4">MP4 (.mp4 - MPEG-4)</option>
                 <option value="mkv">MKV (.mkv - Matroska)</option>
@@ -167,14 +183,14 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
             </div>
 
             {/* Video Codec Selection */}
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
-                <Cpu className="w-3 h-3 mr-1 text-violet-400" /> Video Codec Encoding
+                Video Codec Encoding
               </label>
               <select
                 value={localConfig.videoCodec || 'auto'}
                 onChange={(e) => setLocalConfig({ ...localConfig, videoCodec: e.target.value as any })}
-                className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
+                className="w-full bg-slate-950 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
               >
                 <option value="auto">Auto (Best Hardware Compatibility)</option>
                 <option value="h264">H.264 / AVC (Most Compatible)</option>
@@ -185,14 +201,14 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
             </div>
 
             {/* Audio Bitrate */}
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
-                <Music className="w-3 h-3 mr-1 text-cyber-purple" /> Audio Bitrate
+                Audio Bitrate
               </label>
               <select
                 value={localConfig.audioQuality}
                 onChange={(e) => setLocalConfig({ ...localConfig, audioQuality: e.target.value as any })}
-                className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
+                className="w-full bg-slate-950 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
               >
                 <option value="best">Best (320 kbps VBR)</option>
                 <option value="320k">320 kbps CBR</option>
@@ -200,7 +216,65 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
                 <option value="128k">128 kbps</option>
               </select>
             </div>
+          </div>
+        </div>
 
+        {/* SECTION 2: gallery-dl (Photo & Session Settings) */}
+        <div className="p-3 bg-slate-900/30 border border-slate-800/80 rounded-lg space-y-3">
+          <div className="flex items-center space-x-2 border-b border-slate-800 pb-2">
+            <ImageIcon className="w-4 h-4 text-cyber-cyan" />
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200">gallery-dl Engine (Photo & Carousel Options)</h3>
+          </div>
+
+          <div className="space-y-3">
+            {/* Browser Session Cookies Selector */}
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
+                Browser Cookie Session (Instagram Auth)
+              </label>
+              <select
+                value={localConfig.gallerydlBrowser || 'safari'}
+                onChange={(e) => setLocalConfig({ ...localConfig, gallerydlBrowser: e.target.value as any })}
+                className="w-full bg-slate-950 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
+              >
+                <option value="safari">Safari (Default macOS Session)</option>
+                <option value="chrome">Google Chrome</option>
+                <option value="brave">Brave Browser</option>
+                <option value="firefox">Firefox</option>
+                <option value="edge">Microsoft Edge</option>
+                <option value="opera">Opera</option>
+                <option value="vivaldi">Vivaldi</option>
+              </select>
+              <p className="text-[9px] text-slate-500">Borrows logged-in session cookies from your browser to bypass Instagram walls.</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {/* Photo Naming Template */}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Photo Naming Format</label>
+                <input
+                  type="text"
+                  value={localConfig.gallerydlFilenameFormat || 'Photo by {username|author|owner}_{id|shortcode|tweet_id}_{num}.{extension}'}
+                  onChange={(e) => setLocalConfig({ ...localConfig, gallerydlFilenameFormat: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-md px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyber-cyan"
+                />
+              </div>
+
+              {/* Rate Limit Sleep Delay */}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Rate Limit Delay (Sleep)</label>
+                <select
+                  value={localConfig.gallerydlSleep || '2-5'}
+                  onChange={(e) => setLocalConfig({ ...localConfig, gallerydlSleep: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
+                >
+                  <option value="2-5">2-5 sec (Recommended Safe)</option>
+                  <option value="1-3">1-3 sec (Fast)</option>
+                  <option value="3-8">3-8 sec (Strict Protection)</option>
+                  <option value="0">0 sec (No Delay)</option>
+                </select>
+              </div>
+            </div>
           </div>
         </div>
 
