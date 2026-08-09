@@ -37,11 +37,6 @@
           "name": "yt-dlp",
           "cmd": "yt-dlp",
           "args": true
-        },
-        {
-          "name": "gallery-dl",
-          "cmd": "gallery-dl",
-          "args": true
         }
       ]
     },
@@ -71,11 +66,6 @@
         {
           "name": "yt-dlp",
           "cmd": "yt-dlp",
-          "args": true
-        },
-        {
-          "name": "gallery-dl",
-          "cmd": "gallery-dl",
           "args": true
         }
       ]

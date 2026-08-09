@@ -24,10 +24,9 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
   title,
 }) => {
   const [localConfig, setLocalConfig] = useState<DownloadConfig>(config);
-  const [toolsStatus, setToolsStatus] = useState<{ ytdlp: boolean; ffmpeg: boolean; gallerydl: boolean }>({
+  const [toolsStatus, setToolsStatus] = useState<{ ytdlp: boolean; ffmpeg: boolean }>({
     ytdlp: false,
     ffmpeg: false,
-    gallerydl: false,
   });
   const [installedBrowsers, setInstalledBrowsers] = useState<Array<{ id: string; name: string; installed: boolean }>>([]);
 
@@ -44,7 +43,6 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
     if (isOpen) {
       checkToolAvailability('yt-dlp').then((available) => setToolsStatus((s) => ({ ...s, ytdlp: available })));
       checkToolAvailability('ffmpeg').then((available) => setToolsStatus((s) => ({ ...s, ffmpeg: available })));
-      checkToolAvailability('gallery-dl').then((available) => setToolsStatus((s) => ({ ...s, gallerydl: available })));
       detectInstalledBrowsers().then((browsers) => setInstalledBrowsers(browsers));
     }
   }, [isOpen]);
@@ -106,10 +104,6 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
             <div className="flex items-center space-x-1.5 bg-slate-950 p-2 rounded border border-slate-900">
               {toolsStatus.ffmpeg ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <XCircle className="w-3.5 h-3.5 text-amber-400" />}
               <span className="text-[10px] font-mono font-bold text-slate-300">ffmpeg</span>
-            </div>
-            <div className="flex items-center space-x-1.5 bg-slate-950 p-2 rounded border border-slate-900">
-              {toolsStatus.gallerydl ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <XCircle className="w-3.5 h-3.5 text-slate-600" />}
-              <span className="text-[10px] font-mono font-bold text-slate-300">gallery-dl</span>
             </div>
           </div>
         </div>
@@ -207,37 +201,6 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
               </select>
             </div>
 
-            {/* Download Engine Preference */}
-            <div className="space-y-1.5">
-              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
-                <Wrench className="w-3 h-3 mr-1 text-cyber-cyan" /> CLI Execution Tool
-              </label>
-              <select
-                value={localConfig.toolPreference || 'auto'}
-                onChange={(e) => setLocalConfig({ ...localConfig, toolPreference: e.target.value as any })}
-                className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-cyber-cyan"
-              >
-                <option value="auto">Auto-Detect (yt-dlp for video, gallery-dl for photos)</option>
-                <option value="ytdlp">Force yt-dlp Engine</option>
-                <option value="gallerydl">Force gallery-dl Engine</option>
-              </select>
-            </div>
-
-            {/* Photo Gallery Toggle */}
-            <div className="space-y-1.5">
-              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center">
-                <ImageIcon className="w-3 h-3 mr-1 text-emerald-400" /> Photo Engine
-              </label>
-              <label className="flex items-center space-x-2 bg-slate-900/60 border border-slate-800 rounded-md p-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={localConfig.useGalleryDlForPhotos}
-                  onChange={(e) => setLocalConfig({ ...localConfig, useGalleryDlForPhotos: e.target.checked })}
-                  className="rounded border-slate-700 text-cyber-pink focus:ring-0"
-                />
-                <span className="text-xs text-slate-300 font-semibold">Enable gallery-dl for photos</span>
-              </label>
-            </div>
           </div>
         </div>
 

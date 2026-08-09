@@ -10,8 +10,7 @@ export interface DownloadConfig {
   container: 'mp4' | 'mkv' | 'webm' | 'mp3' | 'mov' | 'avi';
   videoCodec: 'auto' | 'h264' | 'h265' | 'av1' | 'vp9';
   audioQuality: 'best' | '320k' | '256k' | '128k';
-  useGalleryDlForPhotos: boolean;
-  toolPreference: 'auto' | 'ytdlp' | 'gallerydl';
+  toolPreference: 'auto' | 'ytdlp';
   autoUpdateEngine: boolean;
   eagleApiToken?: string;
   eaglePort?: string;
@@ -23,7 +22,6 @@ export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
   container: 'mp4',
   videoCodec: 'auto',
   audioQuality: 'best',
-  useGalleryDlForPhotos: true,
   toolPreference: 'auto',
   autoUpdateEngine: false, // Default false to prevent download startup delays
   eagleApiToken: '',
@@ -32,7 +30,7 @@ export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
 
 export interface EngineBinaryStatus {
   name: string;
-  binary: 'yt-dlp' | 'gallery-dl' | 'ffmpeg';
+  binary: 'yt-dlp' | 'ffmpeg';
   installed: boolean;
   version: string;
   updateAvailable: boolean;
@@ -150,7 +148,7 @@ export async function openFileInFinder(job: MediaJob, dbUrl?: string, configPath
 }
 
 // Engine Binary Version & Health Inspection Functions
-export async function getBinaryVersion(binary: 'yt-dlp' | 'gallery-dl' | 'ffmpeg'): Promise<{ installed: boolean; version: string }> {
+export async function getBinaryVersion(binary: 'yt-dlp' | 'ffmpeg'): Promise<{ installed: boolean; version: string }> {
   try {
     let flag = '--version';
     if (binary === 'ffmpeg') flag = '-version';
@@ -171,7 +169,7 @@ export async function getBinaryVersion(binary: 'yt-dlp' | 'gallery-dl' | 'ffmpeg
   }
 }
 
-export async function checkBinaryUpdate(binary: 'yt-dlp' | 'gallery-dl' | 'ffmpeg'): Promise<{ updateAvailable: boolean; latestVersion?: string }> {
+export async function checkBinaryUpdate(binary: 'yt-dlp' | 'ffmpeg'): Promise<{ updateAvailable: boolean; latestVersion?: string }> {
   try {
     if (binary === 'yt-dlp') {
       const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} yt-dlp -U`]);
@@ -180,14 +178,6 @@ export async function checkBinaryUpdate(binary: 'yt-dlp' | 'gallery-dl' | 'ffmpe
       if (text.includes('updating') || text.includes('available') || text.includes('update')) {
         const latestMatch = output.stdout.match(/latest version is ([^\s]+)/i);
         return { updateAvailable: true, latestVersion: latestMatch ? latestMatch[1] : 'New Version' };
-      }
-      return { updateAvailable: false };
-    } else if (binary === 'gallery-dl') {
-      const cmd = Command.create('sh', ['-c', `${MACOS_PATH_ENV} gallery-dl -U`]);
-      const output = await cmd.execute();
-      const text = (output.stdout + output.stderr).toLowerCase();
-      if (text.includes('updating') || text.includes('available')) {
-        return { updateAvailable: true };
       }
       return { updateAvailable: false };
     } else {
@@ -204,7 +194,7 @@ export async function checkBinaryUpdate(binary: 'yt-dlp' | 'gallery-dl' | 'ffmpe
   }
 }
 
-export async function updateBinaryOnDemand(binary: 'yt-dlp' | 'gallery-dl' | 'ffmpeg'): Promise<{ success: boolean; message: string; newVersion?: string }> {
+export async function updateBinaryOnDemand(binary: 'yt-dlp' | 'ffmpeg'): Promise<{ success: boolean; message: string; newVersion?: string }> {
   try {
     let script = `${MACOS_PATH_ENV} ${binary} -U`;
     if (binary === 'ffmpeg') {
@@ -640,10 +630,9 @@ export async function runInstagramEmbedScraper(
   url: string,
   downloadDir: string,
   onLogOutput?: (type: 'stdout' | 'stderr' | 'info', text: string) => void
-): Promise<{ success: boolean; files: string[] }> {
+): Promise<{ success: boolean; files: string[]; error?: string }> {
   try {
-    const pyScript = `
-import urllib.request, re, ssl, json, os, sys
+    const pyScript = `import urllib.request, re, ssl, json, os, sys
 
 ssl._create_default_https_context = ssl._create_unverified_context
 raw_url = sys.argv[1]
@@ -666,7 +655,7 @@ except Exception as e:
 author_match = re.search(r'"username":\s*"([^"]+)"', html) or re.search(r'class="UsernameText">([^<]+)', html)
 author = author_match.group(1) if author_match else 'instagram_user'
 
-cdn_pattern = r'https://[^\s"\'><]+\.(?:jpg|jpeg|png|webp)[^\s"\'><]*'
+cdn_pattern = r"""https://[^\s"'><]+\.(?:jpg|jpeg|png|webp)[^\s"'><]*"""
 raw_urls = re.findall(cdn_pattern, html)
 
 downloaded = []
@@ -707,8 +696,7 @@ for u in raw_urls:
 print(json.dumps({'success': len(downloaded) > 0, 'files': downloaded}))
 `;
 
-    const b64Code = btoa(pyScript);
-    const shCmd = `${MACOS_PATH_ENV} python3 -c "import base64, sys; exec(base64.b64decode('${b64Code}').decode('utf-8'))" "${url.replace(/"/g, '\\"')}" "${downloadDir.replace(/"/g, '\\"')}"`;
+    const shCmd = `${MACOS_PATH_ENV} python3 - "${url.replace(/"/g, '\\"')}" "${downloadDir.replace(/"/g, '\\"')}" << 'PYEOF'\n${pyScript}\nPYEOF\n`;
     const cmd = Command.create('sh', ['-c', shCmd]);
     const output = await cmd.execute();
 
@@ -723,6 +711,8 @@ print(json.dumps({'success': len(downloaded) > 0, 'files': downloaded}))
           onLogOutput('info', `[INSTAGRAM NATIVE] Extracted ${parsed.files.length} photo file(s) cleanly.`);
         }
         return { success: true, files: parsed.files };
+      } else if (parsed.error) {
+        return { success: false, files: [], error: parsed.error };
       }
     }
   } catch (err: any) {
@@ -730,8 +720,9 @@ print(json.dumps({'success': len(downloaded) > 0, 'files': downloaded}))
     if (onLogOutput) {
       onLogOutput('stderr', `[EMBED ERR] ${err?.message || err}`);
     }
+    return { success: false, files: [], error: err?.message || String(err) };
   }
-  return { success: false, files: [] };
+  return { success: false, files: [], error: 'No media extracted from public embed page' };
 }
 
 export async function executeJobDownload(
@@ -755,28 +746,8 @@ export async function executeJobDownload(
     console.error('Failed to set downloading status in DB:', err);
   }
 
-  // Tool Selection & Fallback Logic
-  let useGalleryDl = false;
-  if (config.toolPreference === 'gallerydl') {
-    useGalleryDl = true;
-  } else if (config.toolPreference === 'ytdlp') {
-    useGalleryDl = false;
-  } else {
-    useGalleryDl = config.useGalleryDlForPhotos && isPhotoUrl(targetUrl, job.platform);
-  }
-
-  if (useGalleryDl) {
-    const galleryDlAvailable = await checkToolAvailability('gallery-dl');
-    if (!galleryDlAvailable) {
-      if (onLogOutput) {
-        onLogOutput(job.id, 'info', '[NOTICE] gallery-dl is not installed on PATH. Automatically falling back to yt-dlp...');
-      }
-      useGalleryDl = false;
-    }
-  }
-
   const ytdlpAvailable = await checkToolAvailability('yt-dlp');
-  if (!ytdlpAvailable && !useGalleryDl) {
+  if (!ytdlpAvailable) {
     const errorMsg = 'yt-dlp binary is not installed on system PATH. Install it using "brew install yt-dlp" in your terminal.';
     if (onLogOutput) {
       onLogOutput(job.id, 'stderr', `[ERR] ${errorMsg}`);
@@ -789,40 +760,24 @@ export async function executeJobDownload(
     return { success: false, error: errorMsg };
   }
 
-  const runSingleAttempt = (forceYtDlp = false): Promise<{ success: boolean; filePath?: string; error?: string }> => {
+  const runSingleAttempt = (): Promise<{ success: boolean; filePath?: string; error?: string }> => {
     return new Promise((resolve) => {
       let args: string[] = [];
-      let toolBinary = 'yt-dlp';
+      const toolBinary = 'yt-dlp';
       let detectedFilePath = '';
 
-      const currentUseGalleryDl = forceYtDlp ? false : useGalleryDl;
+      const outputTemplate = `${expandUserPath(config.downloadPath)}/%(title)s_%(id)s.%(ext)s`;
 
-      if (currentUseGalleryDl) {
-        toolBinary = 'gallery-dl';
-        const outputDir = expandUserPath(config.downloadPath);
-        args = [
-          '-d', outputDir,
-          '-o', 'directory=',
-          '-f', 'Photo by {username|author|owner}_{id|shortcode|tweet_id}_{num}.{extension}',
-          '-P', 'exif',
-          '-O', `exif.tags={"UserComment": "${targetUrl}", "ImageDescription": "${targetUrl}"}`
-        ];
-
-        args.push(targetUrl);
-      } else {
-        toolBinary = 'yt-dlp';
-        const outputTemplate = `${expandUserPath(config.downloadPath)}/%(title)s_%(id)s.%(ext)s`;
-
-        args = [
-          '--progress',
-          '--newline',
-          '--print', 'after_move:filepath',
-          '--embed-metadata',
-          '--parse-metadata', 'webpage_url:%(meta_comment)s',
-          '--parse-metadata', 'webpage_url:%(meta_purl)s',
-          '--parse-metadata', 'webpage_url:%(meta_description)s',
-          '-o', outputTemplate
-        ];
+      args = [
+        '--progress',
+        '--newline',
+        '--print', 'after_move:filepath',
+        '--embed-metadata',
+        '--parse-metadata', 'webpage_url:%(meta_comment)s',
+        '--parse-metadata', 'webpage_url:%(meta_purl)s',
+        '--parse-metadata', 'webpage_url:%(meta_description)s',
+        '-o', outputTemplate
+      ];
 
         // Quality selection
         if (config.quality === '4k') {
@@ -861,7 +816,6 @@ export async function executeJobDownload(
         }
 
         args.push(targetUrl);
-      }
 
       const commandToExec = `${MACOS_PATH_ENV} ${toolBinary} ${args.map((a) => `"${a}"`).join(' ')}`;
       if (onLogOutput) {
@@ -997,13 +951,15 @@ export async function executeJobDownload(
     });
   };
 
-  const isInstagramUrl = targetUrl.includes('instagram.com/p/') || targetUrl.includes('instagram.com/reel/') || targetUrl.includes('instagram.com/reels/');
+  const isInstagramPhoto = targetUrl.includes('instagram.com/p/');
+  const isInstagramReel = targetUrl.includes('instagram.com/reel/') || targetUrl.includes('instagram.com/reels/');
+
   let result: { success: boolean; filePath?: string; error?: string } = { success: false };
 
-  // 1. For Instagram URLs: Try Native Public Embed Engine FIRST (Fast, 100% Public, Zero Login/Cookies needed)
-  if (isInstagramUrl) {
+  // 1. For Instagram Photo posts (/p/): Run Public Embed Scraper EXCLUSIVELY!
+  if (isInstagramPhoto) {
     if (onLogOutput) {
-      onLogOutput(job.id, 'info', '[INSTAGRAM NATIVE] Extracting media directly via Public Instagram Embed Engine...');
+      onLogOutput(job.id, 'info', '[INSTAGRAM PHOTO] Extracting photos directly via Public Instagram Embed Engine...');
     }
     try {
       const embedResult = await runInstagramEmbedScraper(
@@ -1014,24 +970,38 @@ export async function executeJobDownload(
       if (embedResult.success && embedResult.files.length > 0) {
         result = { success: true, filePath: embedResult.files.join('||') };
         if (onLogOutput) {
-          onLogOutput(job.id, 'info', `[INSTAGRAM NATIVE] ✔ Successfully downloaded ${embedResult.files.length} media file(s) via Public Embed Engine!`);
+          onLogOutput(job.id, 'info', `[INSTAGRAM PHOTO] ✔ Successfully downloaded ${embedResult.files.length} photo file(s) via Public Embed Engine!`);
         }
+      } else {
+        const errorMsg = embedResult.error || 'Failed to extract photos from public embed page';
+        if (onLogOutput) {
+          onLogOutput(job.id, 'stderr', `[ERR] ${errorMsg}`);
+        }
+        await db
+          .update(mediaQueue)
+          .set({ status: 'failed', error: errorMsg, updatedAt: new Date() })
+          .where(eq(mediaQueue.id, job.id));
+        if (onProgress) onProgress(job.id, 0, 'failed');
+        return { success: false, error: errorMsg };
       }
-    } catch (e) {
-      console.warn('Instagram Embed Engine primary run warning:', e);
-    }
-  }
-
-  // 2. Fallback to CLI tools (gallery-dl / yt-dlp) if Native Embed Scraper did not return media or for other platforms
-  if (!result.success) {
-    result = await runSingleAttempt(false);
-
-    if (!result.success && useGalleryDl) {
+    } catch (e: any) {
+      const errorMsg = e?.message || 'Instagram Embed Engine execution failed';
       if (onLogOutput) {
-        onLogOutput(job.id, 'info', '[AUTOFALLBACK] Retrying automatically with yt-dlp...');
+        onLogOutput(job.id, 'stderr', `[ERR] ${errorMsg}`);
       }
-      result = await runSingleAttempt(true);
+      await db
+        .update(mediaQueue)
+        .set({ status: 'failed', error: errorMsg, updatedAt: new Date() })
+        .where(eq(mediaQueue.id, job.id));
+      if (onProgress) onProgress(job.id, 0, 'failed');
+      return { success: false, error: errorMsg };
     }
+  } else {
+    // 2. For Instagram Reels (/reel/, /reels/) and all other video links: Run yt-dlp directly!
+    if (isInstagramReel && onLogOutput) {
+      onLogOutput(job.id, 'info', '[INSTAGRAM REEL] Extracting video stream directly via yt-dlp...');
+    }
+    result = await runSingleAttempt();
   }
 
   // Update DB on final outcome with exact file path string

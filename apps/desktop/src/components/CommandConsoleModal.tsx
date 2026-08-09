@@ -109,7 +109,7 @@ export const CommandConsoleModal: React.FC<CommandConsoleModalProps> = ({
         {/* Live Terminal Output Area */}
         <div className="flex-1 p-4 bg-slate-950 font-mono text-xs overflow-y-auto space-y-1.5 select-text selection:bg-violet-900 selection:text-white">
           <div className="text-slate-600 text-[10px]">
-            [ClipGrab CLI Process Stream - yt-dlp / gallery-dl / ffmpeg]
+            [ClipGrab CLI Process Stream - yt-dlp / ffmpeg]
           </div>
           <div className="text-slate-600 text-[10px] pb-2 border-b border-slate-900">
             Spawning process pipeline...
@@ -175,7 +175,7 @@ export const CommandConsoleModal: React.FC<CommandConsoleModalProps> = ({
 
         {/* Footer */}
         <div className="p-3 bg-slate-900/90 border-t border-slate-900 flex justify-between items-center text-[10px] font-mono text-slate-500 shrink-0">
-          <span>Engine: yt-dlp / gallery-dl / ffmpeg</span>
+          <span>Engine: yt-dlp / ffmpeg</span>
           <span>Log Lines: {logs.length}</span>
         </div>
       </Card>
