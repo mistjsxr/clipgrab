@@ -636,7 +636,11 @@ export function exportHistoryToTxt(records: any[]): string {
   return header + body;
 }
 
-export async function runInstagramEmbedScraper(url: string, downloadDir: string): Promise<{ success: boolean; files: string[] }> {
+export async function runInstagramEmbedScraper(
+  url: string,
+  downloadDir: string,
+  onLogOutput?: (type: 'stdout' | 'stderr' | 'info', text: string) => void
+): Promise<{ success: boolean; files: string[] }> {
   try {
     const pyScript = `
 import urllib.request, re, ssl, json, os, sys
@@ -704,15 +708,28 @@ print(json.dumps({'success': len(downloaded) > 0, 'files': downloaded}))
 `;
 
     const b64Code = btoa(pyScript);
-    const shCmd = `python3 -c "$(echo '${b64Code}' | base64 -d)" "${url.replace(/"/g, '\\"')}" "${downloadDir.replace(/"/g, '\\"')}"`;
+    const shCmd = `${MACOS_PATH_ENV} python3 -c "import base64, sys; exec(base64.b64decode('${b64Code}').decode('utf-8'))" "${url.replace(/"/g, '\\"')}" "${downloadDir.replace(/"/g, '\\"')}"`;
     const cmd = Command.create('sh', ['-c', shCmd]);
     const output = await cmd.execute();
+
+    if (onLogOutput && output.stderr) {
+      onLogOutput('stderr', output.stderr);
+    }
+
     if (output.code === 0 && output.stdout) {
       const parsed = JSON.parse(output.stdout.trim());
-      return { success: !!parsed.success, files: parsed.files || [] };
+      if (parsed.success && parsed.files && parsed.files.length > 0) {
+        if (onLogOutput) {
+          onLogOutput('info', `[INSTAGRAM NATIVE] Extracted ${parsed.files.length} photo file(s) cleanly.`);
+        }
+        return { success: true, files: parsed.files };
+      }
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error('runInstagramEmbedScraper error:', err);
+    if (onLogOutput) {
+      onLogOutput('stderr', `[EMBED ERR] ${err?.message || err}`);
+    }
   }
   return { success: false, files: [] };
 }
@@ -989,7 +1006,11 @@ export async function executeJobDownload(
       onLogOutput(job.id, 'info', '[INSTAGRAM NATIVE] Extracting media directly via Public Instagram Embed Engine...');
     }
     try {
-      const embedResult = await runInstagramEmbedScraper(targetUrl, expandUserPath(config.downloadPath));
+      const embedResult = await runInstagramEmbedScraper(
+        targetUrl,
+        expandUserPath(config.downloadPath),
+        (type, text) => { if (onLogOutput) onLogOutput(job.id, type, text); }
+      );
       if (embedResult.success && embedResult.files.length > 0) {
         result = { success: true, filePath: embedResult.files.join('||') };
         if (onLogOutput) {
