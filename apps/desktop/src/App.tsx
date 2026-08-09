@@ -207,19 +207,25 @@ export default function App() {
       try {
         const client = createNeonClient(dbUrl);
         const records = await client.select().from(mediaQueue);
-        const mappedJobs: MediaJob[] = records.map((r) => ({
-          id: r.id,
-          url: r.url,
-          title: r.title || undefined,
-          platform: r.platform as MediaJob['platform'],
-          status: r.status as MediaJob['status'],
-          requestedByDeviceId: r.requestedByDeviceId,
-          progress: r.progress,
-          filePath: r.filePath || undefined,
-          error: r.error || undefined,
-          createdAt: r.createdAt.toISOString(),
-          updatedAt: r.updatedAt.toISOString(),
-        }));
+        const mappedJobs: MediaJob[] = records.map((r) => {
+          const hasFile = !!r.filePath;
+          const status = (hasFile && r.status === 'pending') ? 'completed' : (r.status as MediaJob['status']);
+          const progress = (hasFile && r.status === 'pending') ? 100 : r.progress;
+
+          return {
+            id: r.id,
+            url: r.url,
+            title: r.title || undefined,
+            platform: r.platform as MediaJob['platform'],
+            status,
+            requestedByDeviceId: r.requestedByDeviceId,
+            progress,
+            filePath: r.filePath || undefined,
+            error: r.error || undefined,
+            createdAt: r.createdAt.toISOString(),
+            updatedAt: r.updatedAt.toISOString(),
+          };
+        });
         setJobs(mappedJobs);
       } catch (err) {
         console.error('Failed to fetch media queue from Neon DB:', err);

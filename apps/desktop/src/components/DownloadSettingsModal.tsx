@@ -167,6 +167,56 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
             </select>
           </div>
 
+          {/* Custom Cookies File (.json or .txt) picker */}
+          <div className="space-y-1.5 p-3 bg-amber-950/20 border border-amber-500/20 rounded-md">
+            <label className="text-[10px] uppercase font-bold tracking-wider text-amber-400 flex items-center justify-between">
+              <span className="flex items-center">
+                <ShieldAlert className="w-3.5 h-3.5 mr-1.5 text-amber-400" /> Custom Cookies File (.json or .txt) — Recommended for Instagram
+              </span>
+            </label>
+            <div className="flex items-center space-x-2">
+              <input
+                type="text"
+                readOnly
+                value={localConfig.cookiesFilePath || ''}
+                placeholder="No custom cookies file selected (.json or .txt)"
+                className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-mono font-semibold text-slate-200 focus:outline-none placeholder:text-slate-600"
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    const selected = await open({
+                      multiple: false,
+                      filters: [{ name: 'Cookies File (*.json, *.txt)', extensions: ['json', 'txt'] }],
+                    });
+                    if (selected && typeof selected === 'string') {
+                      setLocalConfig((c) => ({ ...c, cookiesFilePath: selected }));
+                    }
+                  } catch (err) {
+                    console.error('Cookies file picker error:', err);
+                  }
+                }}
+                className="whitespace-nowrap px-3 text-xs border-amber-500/30 text-amber-300 hover:bg-amber-500/10"
+              >
+                Browse...
+              </Button>
+              {localConfig.cookiesFilePath && (
+                <button
+                  onClick={() => setLocalConfig((c) => ({ ...c, cookiesFilePath: '' }))}
+                  className="text-slate-500 hover:text-cyber-pink text-xs font-bold px-1"
+                  title="Clear custom cookies file"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+            <p className="text-[9px] text-slate-400 leading-normal">
+              Bypasses Chrome Keychain &amp; Login Walls! Supports both <code className="text-amber-300 font-mono">.json</code> (Cookie-Editor / EditThisCookie) and Netscape <code className="text-amber-300 font-mono">.txt</code> files. ClipGrab auto-converts JSON on the fly!
+            </p>
+          </div>
+
           {/* Grid Options */}
           <div className="grid grid-cols-2 gap-4">
             {/* Resolution / Quality */}

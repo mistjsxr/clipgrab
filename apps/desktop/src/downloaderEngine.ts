@@ -13,6 +13,7 @@ export interface DownloadConfig {
   useGalleryDlForPhotos: boolean;
   toolPreference: 'auto' | 'ytdlp' | 'gallerydl';
   cookiesBrowser: 'none' | 'chrome' | 'safari' | 'firefox' | 'brave' | 'edge';
+  cookiesFilePath?: string;
   autoUpdateEngine: boolean;
   eagleApiToken?: string;
   eaglePort?: string;
@@ -27,6 +28,7 @@ export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
   useGalleryDlForPhotos: true,
   toolPreference: 'auto',
   cookiesBrowser: 'none',
+  cookiesFilePath: '',
   autoUpdateEngine: false, // Default false to prevent download startup delays
   eagleApiToken: '',
   eaglePort: '22745',
@@ -576,14 +578,15 @@ export async function restoreBatchToQueue(batchItems: any[], dbUrl: string): Pro
 
     const queueEntries = batchItems.map((item) => {
       const payload = createMediaJobPayload(item.url, 'restored_from_history');
+      const isCompleted = item.finalStatus === 'completed' || item.status === 'completed' || !!item.filePath;
       return {
         id: payload.id,
         url: payload.url,
         title: item.title || payload.title,
         platform: item.platform || payload.platform,
-        status: 'pending',
+        status: isCompleted ? 'completed' : (item.finalStatus || item.status || 'pending'),
         requestedByDeviceId: item.requestedByDeviceId || 'restored_history',
-        progress: 0,
+        progress: isCompleted ? 100 : (item.progress || 0),
         filePath: item.filePath || null,
       };
     });
@@ -637,6 +640,134 @@ export function exportHistoryToTxt(records: any[]): string {
   return header + body;
 }
 
+export async function prepareCookiesFile(filePath: string): Promise<string> {
+  const expanded = expandUserPath(filePath.trim());
+  if (!expanded) return '';
+
+  if (expanded.endsWith('.json')) {
+    const targetTxt = expanded.replace(/\.json$/i, '.converted.txt');
+    try {
+      const convertScript = `
+python3 -c "
+import json, sys
+try:
+    with open(sys.argv[1], 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    if isinstance(data, dict):
+        data = data.get('cookies', [data])
+    lines = ['# Netscape HTTP Cookie File']
+    for c in data:
+        if not isinstance(c, dict) or not c.get('name') or not c.get('value'):
+            continue
+        domain = c.get('domain', '.instagram.com')
+        flag = 'TRUE' if domain.startswith('.') else 'FALSE'
+        path = c.get('path', '/')
+        secure = 'TRUE' if c.get('secure', True) else 'FALSE'
+        exp = int(c.get('expirationDate') or c.get('expires') or 0)
+        if exp == 0:
+            exp = 2147483647
+        lines.append(f'{domain}\\t{flag}\\t{path}\\t{secure}\\t{exp}\\t{c[\"name\"]}\\t{c[\"value\"]}')
+    with open(sys.argv[2], 'w', encoding='utf-8') as f:
+        f.write('\\n'.join(lines))
+except Exception as e:
+    sys.exit(1)
+" "${expanded.replace(/"/g, '\\"')}" "${targetTxt.replace(/"/g, '\\"')}"
+      `;
+
+      const cmd = Command.create('sh', ['-c', convertScript]);
+      const res = await cmd.execute();
+      if (res.code === 0) {
+        return targetTxt;
+      }
+    } catch (e) {
+      console.warn('Failed to convert JSON cookies to Netscape format:', e);
+    }
+  }
+
+  return expanded;
+}
+
+export async function runInstagramEmbedScraper(url: string, downloadDir: string): Promise<{ success: boolean; files: string[] }> {
+  try {
+    const pyScript = `
+import urllib.request, re, ssl, json, os, sys
+
+ssl._create_default_https_context = ssl._create_unverified_context
+raw_url = sys.argv[1]
+out_dir = sys.argv[2]
+
+shortcode_match = re.search(r'/(?:p|reel|reels)/([A-Za-z0-9_-]+)', raw_url)
+shortcode = shortcode_match.group(1) if shortcode_match else 'post'
+embed_url = f'https://www.instagram.com/p/{shortcode}/embed/captioned/'
+
+req = urllib.request.Request(embed_url, headers={
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+})
+
+try:
+    html = urllib.request.urlopen(req).read().decode('utf-8')
+except Exception as e:
+    print(json.dumps({'success': False, 'error': str(e)}))
+    sys.exit(0)
+
+author_match = re.search(r'"username":\s*"([^"]+)"', html) or re.search(r'class="UsernameText">([^<]+)', html)
+author = author_match.group(1) if author_match else 'instagram_user'
+
+cdn_pattern = r'https://[^\s"\'><]+\.(?:jpg|jpeg|png|webp)[^\s"\'><]*'
+raw_urls = re.findall(cdn_pattern, html)
+
+downloaded = []
+seen = set()
+
+idx = 1
+for u in raw_urls:
+    u_clean = u.replace('&amp;', '&').replace('\\u0026', '&')
+    if 'profile_pic' in u_clean or 's150x150' in u_clean or 's320x320' in u_clean:
+        continue
+    
+    clean_cdn_url = re.sub(r'stp=[^&]+&?', '', u_clean)
+    if clean_cdn_url in seen:
+        continue
+    seen.add(clean_cdn_url)
+
+    ext = 'jpg'
+    if '.png' in u_clean: ext = 'png'
+    elif '.webp' in u_clean: ext = 'webp'
+
+    fn = f'Photo by {author}_{shortcode}_{idx}.{ext}'
+    idx += 1
+
+    img_req = urllib.request.Request(clean_cdn_url, headers={
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    })
+    try:
+        data = urllib.request.urlopen(img_req).read()
+        if len(data) > 3000:
+            os.makedirs(out_dir, exist_ok=True)
+            target_path = os.path.join(out_dir, fn)
+            with open(target_path, 'wb') as f:
+                f.write(data)
+            downloaded.append(target_path)
+    except Exception:
+        pass
+
+print(json.dumps({'success': len(downloaded) > 0, 'files': downloaded}))
+`;
+
+    const b64Code = btoa(pyScript);
+    const shCmd = `python3 -c "$(echo '${b64Code}' | base64 -d)" "${url.replace(/"/g, '\\"')}" "${downloadDir.replace(/"/g, '\\"')}"`;
+    const cmd = Command.create('sh', ['-c', shCmd]);
+    const output = await cmd.execute();
+    if (output.code === 0 && output.stdout) {
+      const parsed = JSON.parse(output.stdout.trim());
+      return { success: !!parsed.success, files: parsed.files || [] };
+    }
+  } catch (err) {
+    console.error('runInstagramEmbedScraper error:', err);
+  }
+  return { success: false, files: [] };
+}
+
 export async function executeJobDownload(
   job: MediaJob,
   config: DownloadConfig,
@@ -646,6 +777,12 @@ export async function executeJobDownload(
 ): Promise<{ success: boolean; filePath?: string; error?: string }> {
   const db = createNeonClient(dbUrl);
   const targetUrl = cleanMediaUrl(job.url);
+
+  // Prepare cookies file (converts JSON to Netscape format if needed)
+  let activeCookiesPath = '';
+  if (config.cookiesFilePath && config.cookiesFilePath.trim()) {
+    activeCookiesPath = await prepareCookiesFile(config.cookiesFilePath.trim());
+  }
 
   // Update status to 'downloading'
   try {
@@ -706,19 +843,21 @@ export async function executeJobDownload(
         args = [
           '-d', outputDir,
           '-o', 'directory=',
-          '-f', 'Photo by {username|author|owner|shortcode}_{num}.{extension}',
+          '-f', 'Photo by {username|author|owner}_{id|shortcode|tweet_id}_{num}.{extension}',
           '-P', 'exif',
           '-O', `exif.tags={"UserComment": "${targetUrl}", "ImageDescription": "${targetUrl}"}`
         ];
 
-        if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
+        if (activeCookiesPath) {
+          args.push('--cookies', activeCookiesPath);
+        } else if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
           args.push('--cookies-from-browser', config.cookiesBrowser);
         }
 
         args.push(targetUrl);
       } else {
         toolBinary = 'yt-dlp';
-        const outputTemplate = `${expandUserPath(config.downloadPath)}/%(title)s.%(ext)s`;
+        const outputTemplate = `${expandUserPath(config.downloadPath)}/%(title)s_%(id)s.%(ext)s`;
 
         args = [
           '--progress',
@@ -731,7 +870,9 @@ export async function executeJobDownload(
           '-o', outputTemplate
         ];
 
-        if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
+        if (activeCookiesPath) {
+          args.push('--cookies', activeCookiesPath);
+        } else if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
           args.push('--cookies-from-browser', config.cookiesBrowser);
         }
 
@@ -917,6 +1058,21 @@ export async function executeJobDownload(
       onLogOutput(job.id, 'info', '[AUTOFALLBACK] gallery-dl hit a login/redirect wall. Retrying automatically with yt-dlp...');
     }
     result = await runSingleAttempt(true);
+  }
+
+  // Fallback Attempt #3: Instagram Embed Scraper Engine for Instagram Posts/Carousels
+  if (!result.success && (targetUrl.includes('instagram.com/p/') || targetUrl.includes('instagram.com/reel/') || targetUrl.includes('instagram.com/reels/'))) {
+    if (onLogOutput) {
+      onLogOutput(job.id, 'info', '[EMBED ENGINE] CLI tools hit Instagram login wall. Extracting high-res carousel photos directly via Instagram Embed Engine...');
+    }
+    try {
+      const embedResult = await runInstagramEmbedScraper(targetUrl, expandUserPath(config.downloadPath));
+      if (embedResult.success && embedResult.files.length > 0) {
+        result = { success: true, filePath: embedResult.files.join('||') };
+      }
+    } catch (e) {
+      console.warn('Instagram Embed Engine fallback failed:', e);
+    }
   }
 
   // Update DB on final outcome with exact file path string
