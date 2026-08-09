@@ -12,8 +12,6 @@ export interface DownloadConfig {
   audioQuality: 'best' | '320k' | '256k' | '128k';
   useGalleryDlForPhotos: boolean;
   toolPreference: 'auto' | 'ytdlp' | 'gallerydl';
-  cookiesBrowser: 'none' | 'chrome' | 'safari' | 'firefox' | 'brave' | 'edge';
-  cookiesFilePath?: string;
   autoUpdateEngine: boolean;
   eagleApiToken?: string;
   eaglePort?: string;
@@ -27,8 +25,6 @@ export const DEFAULT_DOWNLOAD_CONFIG: DownloadConfig = {
   audioQuality: 'best',
   useGalleryDlForPhotos: true,
   toolPreference: 'auto',
-  cookiesBrowser: 'none',
-  cookiesFilePath: '',
   autoUpdateEngine: false, // Default false to prevent download startup delays
   eagleApiToken: '',
   eaglePort: '22745',
@@ -640,53 +636,6 @@ export function exportHistoryToTxt(records: any[]): string {
   return header + body;
 }
 
-export async function prepareCookiesFile(filePath: string): Promise<string> {
-  const expanded = expandUserPath(filePath.trim());
-  if (!expanded) return '';
-
-  if (expanded.endsWith('.json')) {
-    const targetTxt = expanded.replace(/\.json$/i, '.converted.txt');
-    try {
-      const convertScript = `
-python3 -c "
-import json, sys
-try:
-    with open(sys.argv[1], 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    if isinstance(data, dict):
-        data = data.get('cookies', [data])
-    lines = ['# Netscape HTTP Cookie File']
-    for c in data:
-        if not isinstance(c, dict) or not c.get('name') or not c.get('value'):
-            continue
-        domain = c.get('domain', '.instagram.com')
-        flag = 'TRUE' if domain.startswith('.') else 'FALSE'
-        path = c.get('path', '/')
-        secure = 'TRUE' if c.get('secure', True) else 'FALSE'
-        exp = int(c.get('expirationDate') or c.get('expires') or 0)
-        if exp == 0:
-            exp = 2147483647
-        lines.append(f'{domain}\\t{flag}\\t{path}\\t{secure}\\t{exp}\\t{c[\"name\"]}\\t{c[\"value\"]}')
-    with open(sys.argv[2], 'w', encoding='utf-8') as f:
-        f.write('\\n'.join(lines))
-except Exception as e:
-    sys.exit(1)
-" "${expanded.replace(/"/g, '\\"')}" "${targetTxt.replace(/"/g, '\\"')}"
-      `;
-
-      const cmd = Command.create('sh', ['-c', convertScript]);
-      const res = await cmd.execute();
-      if (res.code === 0) {
-        return targetTxt;
-      }
-    } catch (e) {
-      console.warn('Failed to convert JSON cookies to Netscape format:', e);
-    }
-  }
-
-  return expanded;
-}
-
 export async function runInstagramEmbedScraper(url: string, downloadDir: string): Promise<{ success: boolean; files: string[] }> {
   try {
     const pyScript = `
@@ -778,12 +727,6 @@ export async function executeJobDownload(
   const db = createNeonClient(dbUrl);
   const targetUrl = cleanMediaUrl(job.url);
 
-  // Prepare cookies file (converts JSON to Netscape format if needed)
-  let activeCookiesPath = '';
-  if (config.cookiesFilePath && config.cookiesFilePath.trim()) {
-    activeCookiesPath = await prepareCookiesFile(config.cookiesFilePath.trim());
-  }
-
   // Update status to 'downloading'
   try {
     await db
@@ -848,12 +791,6 @@ export async function executeJobDownload(
           '-O', `exif.tags={"UserComment": "${targetUrl}", "ImageDescription": "${targetUrl}"}`
         ];
 
-        if (activeCookiesPath) {
-          args.push('--cookies', activeCookiesPath);
-        } else if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
-          args.push('--cookies-from-browser', config.cookiesBrowser);
-        }
-
         args.push(targetUrl);
       } else {
         toolBinary = 'yt-dlp';
@@ -869,12 +806,6 @@ export async function executeJobDownload(
           '--parse-metadata', 'webpage_url:%(meta_description)s',
           '-o', outputTemplate
         ];
-
-        if (activeCookiesPath) {
-          args.push('--cookies', activeCookiesPath);
-        } else if (config.cookiesBrowser && config.cookiesBrowser !== 'none') {
-          args.push('--cookies-from-browser', config.cookiesBrowser);
-        }
 
         // Quality selection
         if (config.quality === '4k') {
@@ -1049,29 +980,36 @@ export async function executeJobDownload(
     });
   };
 
-  // Attempt #1
-  let result = await runSingleAttempt(false);
+  const isInstagramUrl = targetUrl.includes('instagram.com/p/') || targetUrl.includes('instagram.com/reel/') || targetUrl.includes('instagram.com/reels/');
+  let result: { success: boolean; filePath?: string; error?: string } = { success: false };
 
-  // Fallback Attempt #2 if gallery-dl failed with login/redirect error
-  if (!result.success && useGalleryDl) {
+  // 1. For Instagram URLs: Try Native Public Embed Engine FIRST (Fast, 100% Public, Zero Login/Cookies needed)
+  if (isInstagramUrl) {
     if (onLogOutput) {
-      onLogOutput(job.id, 'info', '[AUTOFALLBACK] gallery-dl hit a login/redirect wall. Retrying automatically with yt-dlp...');
-    }
-    result = await runSingleAttempt(true);
-  }
-
-  // Fallback Attempt #3: Instagram Embed Scraper Engine for Instagram Posts/Carousels
-  if (!result.success && (targetUrl.includes('instagram.com/p/') || targetUrl.includes('instagram.com/reel/') || targetUrl.includes('instagram.com/reels/'))) {
-    if (onLogOutput) {
-      onLogOutput(job.id, 'info', '[EMBED ENGINE] CLI tools hit Instagram login wall. Extracting high-res carousel photos directly via Instagram Embed Engine...');
+      onLogOutput(job.id, 'info', '[INSTAGRAM NATIVE] Extracting media directly via Public Instagram Embed Engine...');
     }
     try {
       const embedResult = await runInstagramEmbedScraper(targetUrl, expandUserPath(config.downloadPath));
       if (embedResult.success && embedResult.files.length > 0) {
         result = { success: true, filePath: embedResult.files.join('||') };
+        if (onLogOutput) {
+          onLogOutput(job.id, 'info', `[INSTAGRAM NATIVE] ✔ Successfully downloaded ${embedResult.files.length} media file(s) via Public Embed Engine!`);
+        }
       }
     } catch (e) {
-      console.warn('Instagram Embed Engine fallback failed:', e);
+      console.warn('Instagram Embed Engine primary run warning:', e);
+    }
+  }
+
+  // 2. Fallback to CLI tools (gallery-dl / yt-dlp) if Native Embed Scraper did not return media or for other platforms
+  if (!result.success) {
+    result = await runSingleAttempt(false);
+
+    if (!result.success && useGalleryDl) {
+      if (onLogOutput) {
+        onLogOutput(job.id, 'info', '[AUTOFALLBACK] Retrying automatically with yt-dlp...');
+      }
+      result = await runSingleAttempt(true);
     }
   }
 

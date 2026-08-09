@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Button, Card } from '@clipgrab/ui';
 import { open } from '@tauri-apps/plugin-dialog';
 import { DownloadConfig, checkToolAvailability, detectInstalledBrowsers } from '../downloaderEngine';
-import { Folder, Settings2, CheckCircle2, XCircle, Sliders, Film, Music, Image as ImageIcon, Play, Wrench, Cookie, ShieldAlert, Cpu } from 'lucide-react';
+import { Folder, Settings2, CheckCircle2, XCircle, Sliders, Film, Music, Image as ImageIcon, Play, Wrench, Cpu } from 'lucide-react';
 
 export interface DownloadSettingsModalProps {
   isOpen: boolean;
@@ -114,17 +114,6 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
           </div>
         </div>
 
-        {/* User Transparency Explanation Banner */}
-        <div className="p-3.5 bg-amber-950/20 border border-amber-500/30 rounded-md text-xs space-y-1.5 text-amber-300">
-          <div className="flex items-center space-x-1.5 font-bold text-[10px] uppercase tracking-wider text-amber-400">
-            <ShieldAlert className="w-4 h-4 text-amber-400 flex-shrink-0" />
-            <span>Why Import Browser Session Cookies?</span>
-          </div>
-          <p className="text-[11px] text-amber-200/80 leading-relaxed">
-            Platforms like Instagram, X/Twitter, and YouTube block anonymous downloads for certain posts and redirect scrapers to a login page. Importing cookies from your logged-in browser bypasses login walls without needing your password.
-          </p>
-        </div>
-
         {/* Form Controls */}
         <div className="space-y-4">
           {/* Destination Path Selector */}
@@ -141,80 +130,6 @@ export const DownloadSettingsModal: React.FC<DownloadSettingsModalProps> = ({
                 <Folder className="w-3.5 h-3.5 mr-1.5 text-cyber-cyan" /> Browse
               </Button>
             </div>
-          </div>
-
-          {/* Cookie Source Selector */}
-          <div className="space-y-1.5">
-            <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center justify-between">
-              <span className="flex items-center">
-                <Cookie className="w-3.5 h-3.5 mr-1.5 text-amber-400" /> Browser Cookies Source (Bypass Login Walls)
-              </span>
-              <span className="text-[9px] text-emerald-400 font-mono font-bold">
-                {installedBrowsers.filter((b) => b.installed).length} Browsers Detected
-              </span>
-            </label>
-            <select
-              value={localConfig.cookiesBrowser || 'none'}
-              onChange={(e) => setLocalConfig({ ...localConfig, cookiesBrowser: e.target.value as any })}
-              className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-semibold text-slate-200 focus:outline-none focus:border-amber-400"
-            >
-              <option value="none">None (Unauthenticated / Public Only)</option>
-              {installedBrowsers.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name} {b.installed ? '✓ Installed' : '(Not detected)'}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Custom Cookies File (.json or .txt) picker */}
-          <div className="space-y-1.5 p-3 bg-amber-950/20 border border-amber-500/20 rounded-md">
-            <label className="text-[10px] uppercase font-bold tracking-wider text-amber-400 flex items-center justify-between">
-              <span className="flex items-center">
-                <ShieldAlert className="w-3.5 h-3.5 mr-1.5 text-amber-400" /> Custom Cookies File (.json or .txt) — Recommended for Instagram
-              </span>
-            </label>
-            <div className="flex items-center space-x-2">
-              <input
-                type="text"
-                readOnly
-                value={localConfig.cookiesFilePath || ''}
-                placeholder="No custom cookies file selected (.json or .txt)"
-                className="w-full bg-slate-900 border border-slate-800 rounded-md px-3 py-2 text-xs font-mono font-semibold text-slate-200 focus:outline-none placeholder:text-slate-600"
-              />
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={async () => {
-                  try {
-                    const selected = await open({
-                      multiple: false,
-                      filters: [{ name: 'Cookies File (*.json, *.txt)', extensions: ['json', 'txt'] }],
-                    });
-                    if (selected && typeof selected === 'string') {
-                      setLocalConfig((c) => ({ ...c, cookiesFilePath: selected }));
-                    }
-                  } catch (err) {
-                    console.error('Cookies file picker error:', err);
-                  }
-                }}
-                className="whitespace-nowrap px-3 text-xs border-amber-500/30 text-amber-300 hover:bg-amber-500/10"
-              >
-                Browse...
-              </Button>
-              {localConfig.cookiesFilePath && (
-                <button
-                  onClick={() => setLocalConfig((c) => ({ ...c, cookiesFilePath: '' }))}
-                  className="text-slate-500 hover:text-cyber-pink text-xs font-bold px-1"
-                  title="Clear custom cookies file"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
-            <p className="text-[9px] text-slate-400 leading-normal">
-              Bypasses Chrome Keychain &amp; Login Walls! Supports both <code className="text-amber-300 font-mono">.json</code> (Cookie-Editor / EditThisCookie) and Netscape <code className="text-amber-300 font-mono">.txt</code> files. ClipGrab auto-converts JSON on the fly!
-            </p>
           </div>
 
           {/* Grid Options */}
