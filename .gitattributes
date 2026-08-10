@@ -1,0 +1,9 @@
+# GitHub Linguist Configuration
+# Mark lockfiles and generated schema files as vendored so they don't distort repository language statistics
+
+pnpm-lock.yaml linguist-vendored
+*.lock linguist-vendored
+apps/desktop/src-tauri/gen/** linguist-vendored
+apps/desktop/src-tauri/Cargo.lock linguist-vendored
+pnpm-workspace.yaml linguist-documentation
+turbo.json linguist-documentation
