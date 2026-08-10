@@ -68,6 +68,20 @@ ios/build/
 .env.*
 !.env.example
 
+# 🎬 Media & Downloader Outputs
+*.mp4
+*.mp3
+*.mov
+*.mkv
+*.avi
+*.webm
+*.flv
+
+# 🍪 Cookies & Process Logs
+*.cookies
+cookies.txt
+*.log
+
 # 💻 OS & IDE Files
 .DS_Store
 **/.DS_Store
@@ -84,3 +98,4 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
